@@ -1,7 +1,7 @@
 use std::ffi::c_char;
-use crate::gc::RustGc;
+use crate::gc::{RustGc, ObjectHandle};
 use crate::gcinterface::{GcDescVars, IGCHandleManager, IGCHeap, IGCToCLR};
-use crate::types::{Object, ObjectHandle, ObjectRef, HandleType};
+use crate::types::{Object, ObjectRef, HandleType};
 
 mod gc;
 mod gcinterface;

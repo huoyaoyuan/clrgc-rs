@@ -1,5 +1,3 @@
-pub type ObjectHandle = usize;
-
 #[repr(C)]
 pub struct Object {
     method_table: usize,
@@ -9,7 +7,7 @@ pub struct Object {
 pub type ObjectRef = *mut Object;
 
 #[repr(i32)]
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub enum HandleType {
     Short = 0,
     ShortRecurrsion = 1,

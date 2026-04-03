@@ -1,4 +1,4 @@
-pub use handle_manager::HandleManager;
+pub use handle_manager::{ObjectHandle, HandleManager};
 
 mod handle_manager;
 
