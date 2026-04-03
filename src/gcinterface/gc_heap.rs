@@ -1,5 +1,7 @@
 use crate::{ObjectRef, gc::RustGc};
+use crate::gcinterface::gc_to_clr::{WriteBarrierOp, WriteBarrierParameters};
 use std::ffi::c_void;
+use std::usize;
 
 #[repr(C)]
 pub struct gc_alloc_context {
@@ -83,8 +85,8 @@ pub struct IGCHeapVTable {
     // GetLastGCPercentTimeInGC: unsafe extern "system" fn(this: *mut IGCHeap) -> i32,
     // GetLastGCGenerationSize: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32) -> isize,
     // Miscellaneous routines used by the VM
-    vm: [DummyFunc; 16],
-    // Initialize: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
+    Initialize: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
+    vm: [DummyFunc; 15],
     // IsPromoted: unsafe extern "system" fn(this: *mut IGCHeap, obj: ObjectRef) -> bool,
     // IsHeapPointer: unsafe extern "system" fn(this: *mut IGCHeap, obj: *const c_void, small_heap_only: bool) -> bool,
     // GetCondemnedGeneration: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
@@ -115,17 +117,23 @@ pub struct IGCHeapVTable {
     profiling: [DummyFunc; 11],
     stress_heap: DummyFunc,
     frozen: [DummyFunc; 3],
-    ControlEvents: extern "system" fn(i32, i32),
-    ControlPrivateEvents: extern "system" fn(i32, i32),
-    more: [DummyFunc; 11],
+    more: [DummyFunc; 13],
 }
 
-extern "system" fn GCHeap_ControlEvents (_: i32, _: i32) {
-    println!("GCHeap::ControlEvents");
+fn get_gc(this: *mut IGCHeap) -> &'static mut RustGc {
+    unsafe { &mut *(*this).gc }
 }
 
-extern "system" fn GCHeap_ControlPrivateEvents (_: i32, _: i32) {
-    println!("GCHeap::ControlEvents");
+extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
+    println!("GCHeap::Initialize");
+
+    let mut write_barrier_args = WriteBarrierParameters::default();
+    write_barrier_args.operation = WriteBarrierOp::Initialize;
+    write_barrier_args.is_runtime_suspended = true;
+    write_barrier_args.ephemeral_low = usize::MAX;
+    get_gc(this).clr.stomp_write_barrier(&write_barrier_args);
+
+    0x80004005
 }
 
 const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
@@ -133,16 +141,15 @@ const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
     concurrent: [nop; 6],
     finalization: [nop; 2],
     bcl: [nop; 22],
-    vm: [nop; 16],
+    Initialize: GCHeap_Initialize,
+    vm: [nop; 15],
     timing: [nop; 3],
     alloc: [nop; 4],
     verification: [nop; 4],
     profiling: [nop; 11],
     stress_heap: nop,
     frozen: [nop; 3],
-    ControlEvents: GCHeap_ControlEvents,
-    ControlPrivateEvents: GCHeap_ControlPrivateEvents,
-    more: [nop; 11],
+    more: [nop; 13],
 };
 
 impl IGCHeap {

@@ -28,6 +28,35 @@ pub enum SUSPEND_REASON {
     SUSPEND_FOR_GC_PREP = 6,
 }
 
+#[repr(i32)]
+#[derive(Default)]
+pub enum WriteBarrierOp {
+    #[default]
+    StompResize = 0,
+    StompEphemeral = 1,
+    Initialize = 2,
+    SwitchToWriteWatch = 3,
+    SwitchToNonWriteWatch = 4,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct WriteBarrierParameters {
+    pub operation: WriteBarrierOp,
+    pub is_runtime_suspended: bool,
+    pub requires_upper_bounds_check: bool,
+    pub card_table: usize,
+    pub card_bundle_table: usize,
+    pub lowest_address: usize,
+    pub highest_address: usize,
+    pub ephemeral_low: usize,
+    pub ephemeral_high: usize,
+    pub write_watch_table: usize,
+    pub region_to_generation_table: usize,
+    pub region_shr: usize,
+    pub region_use_bitwise_write_barrier: bool,
+}
+
 #[repr(C)]
 struct IGCToClrVTable {
     SuspendEE: extern "system" fn(this: *const IGCToCLR, reason: SUSPEND_REASON),
@@ -50,6 +79,8 @@ struct IGCToClrVTable {
     GcEnumAllocContexts: extern "system" fn(this: *const IGCToCLR, func: extern "system" fn(*const gc_alloc_context, *const c_void), param: *const c_void),
     GetLoaderAllocatorObjectForGC: extern "system" fn(this: *const IGCToCLR, object: *const Object) -> isize,
     CreateThread: extern "system" fn(this: *const IGCToCLR, thread_start: extern "system" fn(*const c_void), arg: *const c_void, is_suspendable: bool, name: *const c_char),
+    diag: [usize; 7],
+    StompWriteBarrier: extern "system" fn(this: *const IGCToCLR, args: *const WriteBarrierParameters),
 }
 
 pub struct GCToCLR {
@@ -109,5 +140,9 @@ impl GCToCLR {
             }
         }
         (self.vtable().GcEnumAllocContexts)(self.ptr, callback, Box::into_raw(closure) as *const c_void)
+    }
+
+    pub fn stomp_write_barrier(&self, args: &WriteBarrierParameters) {
+        (self.vtable().StompWriteBarrier)(self.ptr, args)
     }
 }
