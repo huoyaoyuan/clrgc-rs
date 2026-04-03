@@ -1,35 +1,64 @@
+use crate::{ObjectHandle, ObjectRef, HandleType};
 use crate::gc::RustGc;
-use super::Object;
-
-type object_handle = usize;
-
-#[repr(i32)]
-pub enum handle_type {
-    HNDTYPE_WEAK_SHORT = 0,
-    HNDTYPE_WEAK_DEFAULT = 1,
-    HNDTYPE_STRONG = 2,
-    HNDTYPE_PINNED = 3,
-}
 
 #[repr(C)]
 pub struct IGCHandleStore {
     vptr: *const IGCHandleStoreVTable,
+    gc: *mut RustGc,
 }
 
 #[repr(C)]
 pub struct IGCHandleStoreVTable {
     Uproot: extern "system" fn (this: *mut IGCHandleStore),
-    ContainsHandle: extern "system" fn (this: *mut IGCHandleStore, handle: object_handle) -> bool,
-    CreateHandleOfType: extern "system" fn (this: *mut IGCHandleStore, obj: *const Object, t: handle_type) -> object_handle,
-    CreateHandleOfType2: extern "system" fn (this: *mut IGCHandleStore, obj: *const Object, t: handle_type, heapToAffinitizeTo: i32) -> object_handle,
-    CreateHandleWithExtraInfo: extern "system" fn (this: *mut IGCHandleStore, obj: *const Object, extra_info: isize) -> bool,
-    CreateDependentHandle: extern "system" fn (this: *mut IGCHandleStore, primary: *const Object, secondary: *const Object) -> bool,
+    ContainsHandle: extern "system" fn (this: *mut IGCHandleStore, handle: ObjectHandle) -> bool,
+    CreateHandleOfType: extern "system" fn (this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType) -> ObjectHandle,
+    CreateHandleOfType2: extern "system" fn (this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, heapToAffinitizeTo: i32) -> ObjectHandle,
+    CreateHandleWithExtraInfo: extern "system" fn (this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, extra_info: usize) -> ObjectHandle,
+    CreateDependentHandle: extern "system" fn (this: *mut IGCHandleStore, primary: ObjectRef, secondary: ObjectRef) -> ObjectHandle,
     Destruct: extern "system" fn (this: *mut IGCHandleStore),
 }
+
+fn get_gc_store(this: *mut IGCHandleStore) -> &'static mut RustGc {
+    unsafe { &mut *(*this).gc }
+}
+
+extern "system" fn GCHandleStore_Nop(_: *mut IGCHandleStore) {
+}
+
+extern "system" fn GCHandleStore_ContainsHandle(this: *mut IGCHandleStore, handle: ObjectHandle) -> bool {
+    get_gc_store(this).handle_manager.contains_handle(handle)
+}
+
+extern "system" fn GCHandleStore_CreateHandleOfType(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType) -> ObjectHandle {
+    get_gc_store(this).handle_manager.create_handle(obj, 0, t)
+}
+
+extern "system" fn GCHandleStore_CreateHandleOfType2(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, _: i32) -> ObjectHandle {
+    get_gc_store(this).handle_manager.create_handle(obj, 0, t)
+}
+
+extern "system" fn GCHandleStore_CreateHandleWithExtraInfo(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, extra_info: usize) -> ObjectHandle {
+    get_gc_store(this).handle_manager.create_handle(obj, extra_info, t)
+}
+
+extern "system" fn GCHandleStore_CreateDependentHandle(this: *mut IGCHandleStore, primary: ObjectRef, secondary: ObjectRef) -> ObjectHandle {
+    get_gc_store(this).handle_manager.create_handle(primary, secondary as usize, HandleType::Dependent)
+}
+
+const GCHandleStore_vtable : IGCHandleStoreVTable = IGCHandleStoreVTable {
+    Uproot: GCHandleStore_Nop,
+    ContainsHandle: GCHandleStore_ContainsHandle,
+    CreateHandleOfType: GCHandleStore_CreateHandleOfType,
+    CreateHandleOfType2: GCHandleStore_CreateHandleOfType2,
+    CreateHandleWithExtraInfo: GCHandleStore_CreateHandleWithExtraInfo,
+    CreateDependentHandle: GCHandleStore_CreateDependentHandle,
+    Destruct: GCHandleStore_Nop,
+};
 
 #[repr(C)]
 pub struct IGCHandleManager {
     vptr: *const IGCHandleManagerVTable,
+    handle_store: IGCHandleStore,
     gc: *mut RustGc,
 }
 
@@ -87,6 +116,10 @@ const GCHandleManager_vtable : IGCHandleManagerVTable = IGCHandleManagerVTable {
 
 impl IGCHandleManager {
     pub fn new(gc: *mut RustGc) -> IGCHandleManager {
-        IGCHandleManager { vptr: &GCHandleManager_vtable, gc }
+        IGCHandleManager {
+            vptr: &GCHandleManager_vtable,
+            handle_store: IGCHandleStore { vptr: &GCHandleStore_vtable, gc },
+            gc,
+        }
     }
 }

@@ -9,11 +9,6 @@ pub use gc_to_clr::IGCToCLR;
 pub use handle_manager::IGCHandleManager;
 
 #[repr(C)]
-pub struct Object {
-
-}
-
-#[repr(C)]
 pub struct GcDescVars {
     major_version_number: u8,
     minor_version_number: u8,

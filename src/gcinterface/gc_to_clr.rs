@@ -1,6 +1,6 @@
 use std::ffi::{c_char, c_void};
 use super::gc_heap::gc_alloc_context;
-use super::Object;
+use crate::Object;
 
 #[repr(C)]
 pub struct IGCToCLR {

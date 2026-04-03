@@ -1,4 +1,4 @@
-use super::Object;
+use crate::ObjectRef;
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -33,7 +33,7 @@ pub struct IGCHeapVTable {
     WaitUntilConcurrentGCCompleteAsync: unsafe extern "system" fn(this: *mut IGCHeap, millisecondsTimeout: i32) -> u32,
     // Finalization
     GetNumberOfFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> isize,
-    GetNextFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> *const Object,
+    GetNextFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> ObjectRef,
     // BCL rountines
     GetMemoryInfo: unsafe extern "system" fn(this: *mut IGCHeap,
         highMemLoadThresholdBytes: *mut u64,
@@ -62,7 +62,7 @@ pub struct IGCHeapVTable {
     CancelFullGCNotification: unsafe extern "system" fn(this: *mut IGCHeap) -> bool,
     WaitForFullGCApproach: unsafe extern "system" fn(this: *mut IGCHeap, millisecondsTimeout: i32) -> i32,
     WaitForFullGCComplete: unsafe extern "system" fn(this: *mut IGCHeap, millisecondsTimeout: i32) -> i32,
-    WhichGeneration: unsafe extern "system" fn(this: *mut IGCHeap, obj: *mut Object) -> i32,
+    WhichGeneration: unsafe extern "system" fn(this: *mut IGCHeap, obj: ObjectRef) -> i32,
     CollectionCount: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, get_bgc_fgc_count: i32) -> i32,
     StartNoGCRegion: unsafe extern "system" fn(this: *mut IGCHeap, totalSize: u64, lohSizeKnown: bool, lohSize: u64, disallowFullBlockingGC: bool) -> i32,
     EndNoGCRegion: unsafe extern "system" fn(this: *mut IGCHeap) -> i32,
@@ -70,19 +70,19 @@ pub struct IGCHeapVTable {
     GetTotalAllocatedBytes: unsafe extern "system" fn(this: *mut IGCHeap) -> i64,
     GarbageCollect: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, low_memory_p: bool, mode: i32) -> u32,
     GetMaxGeneration: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
-    SetFinalizationRun: unsafe extern "system" fn(this: *mut IGCHeap, obj: *mut Object),
-    RegisterForFinalization: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, obj: *mut Object) -> bool,
+    SetFinalizationRun: unsafe extern "system" fn(this: *mut IGCHeap, obj: ObjectRef),
+    RegisterForFinalization: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, obj: ObjectRef) -> bool,
     GetLastGCPercentTimeInGC: unsafe extern "system" fn(this: *mut IGCHeap) -> i32,
     GetLastGCGenerationSize: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32) -> isize,
     // Miscellaneous routines used by the VM
     Initialize: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
-    IsPromoted: unsafe extern "system" fn(this: *mut IGCHeap, obj: *const Object) -> bool,
+    IsPromoted: unsafe extern "system" fn(this: *mut IGCHeap, obj: ObjectRef) -> bool,
     IsHeapPointer: unsafe extern "system" fn(this: *mut IGCHeap, obj: *const c_void, small_heap_only: bool) -> bool,
     GetCondemnedGeneration: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
     IsGCInProgressHelper: unsafe extern "system" fn(this: *mut IGCHeap, bConsiderGCStart: bool) -> bool,
     GetGcCount: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
     IsThreadUsingAllocationContextHeap: unsafe extern "system" fn(this: *mut IGCHeap, acontext: *mut gc_alloc_context, thread_number: i32) -> bool,
-    IsEphemeral: unsafe extern "system" fn(this: *mut IGCHeap, acontext: *const Object) -> bool,
+    IsEphemeral: unsafe extern "system" fn(this: *mut IGCHeap, acontext: ObjectRef) -> bool,
     WaitUntilGCComplete: unsafe extern "system" fn(this: *mut IGCHeap, bConsiderGCStart: bool) -> u32,
     FixAllocContext: unsafe extern "system" fn(this: *mut IGCHeap, arg: usize, heap: usize),
     GetCurrentObjSize: unsafe extern "system" fn(this: *mut IGCHeap) -> isize,
@@ -96,8 +96,8 @@ pub struct IGCHeapVTable {
     GetLastGCDuration: unsafe extern "system" fn (this: *mut IGCHeap, generation: i32) -> isize,
     GetNow: unsafe extern "system" fn (this: *mut IGCHeap, generation: i32) -> isize,
     // Allocation routines
-    Alloc: unsafe extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: isize, flags: u32) -> *const Object,
-    PublishObject: unsafe extern "system" fn (this: *mut IGCHeap, obj: usize) -> *const Object,
+    Alloc: unsafe extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: isize, flags: u32) -> ObjectRef,
+    PublishObject: unsafe extern "system" fn (this: *mut IGCHeap, obj: usize) -> ObjectRef,
     SetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
     ResetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
 }
