@@ -1,6 +1,5 @@
 use crate::{ObjectRef, gc::RustGc};
 use crate::gcinterface::gc_to_clr::{WriteBarrierOp, WriteBarrierParameters};
-use std::alloc::{Layout, alloc_zeroed};
 use std::cmp::max;
 
 #[repr(C)]
@@ -136,7 +135,7 @@ extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     0
 }
 
-extern "system" fn GCHeap_Alloc(_this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, _flags: u32) -> ObjectRef {
+extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, _flags: u32) -> ObjectRef {
     let context = unsafe { &mut *acontext };
     let obj = context.alloc_ptr as ObjectRef;
     let new_ptr = context.alloc_ptr + size;
@@ -145,7 +144,9 @@ extern "system" fn GCHeap_Alloc(_this: *mut IGCHeap, acontext: *mut gc_alloc_con
         obj
     } else {
         let segment_size = max(size, 32 * 1024);
-        let new_segment = unsafe { alloc_zeroed(Layout::from_size_align(segment_size, size_of::<usize>()).unwrap()) as usize };
+        let segment = get_gc(this).add_segment(segment_size);
+        let new_segment = segment.data.as_ptr() as usize;
+        println!("Allocated new segment at {:016x}, Length {}", new_segment, segment_size);
         context.alloc_ptr = new_segment + size + size_of::<usize>();
         context.alloc_limit = new_segment + segment_size;
         (new_segment + size_of::<usize>()) as ObjectRef
