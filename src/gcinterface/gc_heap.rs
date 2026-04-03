@@ -1,7 +1,7 @@
 use crate::{ObjectRef, gc::RustGc};
 use crate::gcinterface::gc_to_clr::{WriteBarrierOp, WriteBarrierParameters};
-use std::ffi::c_void;
-use std::usize;
+use std::alloc::{Layout, alloc_zeroed};
+use std::cmp::max;
 
 #[repr(C)]
 pub struct gc_alloc_context {
@@ -9,8 +9,8 @@ pub struct gc_alloc_context {
     alloc_limit: usize,
     alloc_bytes: i64,
     alloc_bytes_uoh: i64,
-    gc_reserved_1: *const c_void,
-    gc_reserved_2: *const c_void,
+    gc_reserved_1: usize,
+    gc_reserved_2: usize,
     alloc_count: i32
 }
 
@@ -108,8 +108,8 @@ pub struct IGCHeapVTable {
     // GetLastGCDuration: unsafe extern "system" fn (this: *mut IGCHeap, generation: i32) -> isize,
     // GetNow: unsafe extern "system" fn (this: *mut IGCHeap, generation: i32) -> isize,
     // Allocation routines
-    alloc: [DummyFunc; 4],
-    // Alloc: unsafe extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: isize, flags: u32) -> ObjectRef,
+    Alloc: extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, flags: u32) -> ObjectRef,
+    alloc: [DummyFunc; 3],
     // PublishObject: unsafe extern "system" fn (this: *mut IGCHeap, obj: usize) -> ObjectRef,
     // SetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
     // ResetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
@@ -133,7 +133,23 @@ extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     write_barrier_args.ephemeral_low = usize::MAX;
     get_gc(this).clr.stomp_write_barrier(&write_barrier_args);
 
-    0x80004005
+    0
+}
+
+extern "system" fn GCHeap_Alloc(_this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, _flags: u32) -> ObjectRef {
+    let context = unsafe { &mut *acontext };
+    let obj = context.alloc_ptr as ObjectRef;
+    let new_ptr = context.alloc_ptr + size;
+    if new_ptr < context.alloc_limit {
+        context.alloc_ptr = new_ptr;
+        obj
+    } else {
+        let segment_size = max(size, 32 * 1024);
+        let new_segment = unsafe { alloc_zeroed(Layout::from_size_align(segment_size, size_of::<usize>()).unwrap()) as usize };
+        context.alloc_ptr = new_segment + size + size_of::<usize>();
+        context.alloc_limit = new_segment + segment_size;
+        (new_segment + size_of::<usize>()) as ObjectRef
+    }
 }
 
 const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
@@ -144,7 +160,8 @@ const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
     Initialize: GCHeap_Initialize,
     vm: [nop; 15],
     timing: [nop; 3],
-    alloc: [nop; 4],
+    Alloc: GCHeap_Alloc,
+    alloc: [nop; 3],
     verification: [nop; 4],
     profiling: [nop; 11],
     stress_heap: nop,
