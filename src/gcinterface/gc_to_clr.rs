@@ -57,6 +57,10 @@ pub struct GCToCLR {
 }
 
 impl GCToCLR {
+    pub fn new(ptr: *const IGCToCLR) -> Self {
+        Self { ptr }
+    }
+
     fn vtable(&self) -> &'static IGCToClrVTable {
         unsafe {
             let obj: &IGCToCLR = &*self.ptr;
