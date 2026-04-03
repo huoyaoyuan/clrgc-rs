@@ -93,6 +93,7 @@ fn get_gc(this: *mut IGCHandleManager) -> &'static mut RustGc {
 }
 
 extern "system" fn GCHandleManager_Initialize(_: *mut IGCHandleManager) -> bool {
+    println!("GCHandleManager_Initialize");
     true
 }
 

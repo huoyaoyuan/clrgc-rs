@@ -16,16 +16,17 @@ unsafe fn heap_alloc<T>(value: T) -> *mut T {
 #[unsafe(no_mangle)]
 pub extern "C" fn GC_Initialize(
     _clrToGC: *const IGCToCLR,
-    _gcHeap: *mut *const IGCHeap,
+    gcHeap: *mut *const IGCHeap,
     gcHandleManager: *mut *const IGCHandleManager,
     _gcDescVars: *mut GcDescVars) -> u32 {
     println!("GC_Initialize!");
 
     unsafe {
         let gc = heap_alloc(RustGc::new());
-        *gcHandleManager = heap_alloc(IGCHandleManager::new(gc))
+        *gcHeap = heap_alloc(IGCHeap::new(gc));
+        *gcHandleManager = heap_alloc(IGCHandleManager::new(gc));
     }
-    0x80004005
+    0
 }
 
 #[allow(nonstandard_style)]
