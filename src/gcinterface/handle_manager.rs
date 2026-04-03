@@ -1,3 +1,5 @@
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use crate::{ObjectHandle, ObjectRef, HandleType};
 use crate::gc::RustGc;
 
@@ -138,11 +140,17 @@ extern "system" fn GCHandleManager_StoreObjectInHandle(_: *mut IGCHandleManager,
 }
 
 extern "system" fn GCHandleManager_StoreObjectInHandleIfNull(_: *mut IGCHandleManager, handle: ObjectHandle, obj: ObjectRef) {
-    todo!()
+    let a = unsafe { AtomicPtr::from_ptr(&mut (*handle).object) };
+    _ = a.compare_exchange(null_mut(), obj, Ordering::AcqRel, Ordering::Relaxed);
 }
 
 extern "system" fn GCHandleManager_InterlockedCompareExchangeObjectInHandle(_: *mut IGCHandleManager, handle: ObjectHandle, obj: ObjectRef, comparand: ObjectRef) -> ObjectRef {
-    todo!()
+    let a = unsafe { AtomicPtr::from_ptr(&mut (*handle).object) };
+    let r = a.compare_exchange(comparand, obj, Ordering::AcqRel, Ordering::Relaxed);
+    match r {
+        Ok(v) => v,
+        Err(v) => v,
+    }
 }
 
 extern "system" fn GCHandleManager_HandleFetchType(_: *mut IGCHandleManager, handle: ObjectHandle) -> HandleType {
