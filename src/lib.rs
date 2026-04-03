@@ -1,16 +1,27 @@
 use std::ffi::c_char;
-use crate::gcinterface::{GcDescVars, IGCHandleManager, IGCHeap, IGCToCLR};
+use crate::{gc::RustGc, gcinterface::{GcDescVars, IGCHandleManager, IGCHeap, IGCToCLR}};
 
+mod gc;
 mod gcinterface;
+
+unsafe fn heap_alloc<T>(value: T) -> *mut T {
+    let b = Box::new(value);
+    Box::into_raw(b)
+}
 
 #[allow(nonstandard_style)]
 #[unsafe(no_mangle)]
 pub extern "C" fn GC_Initialize(
     _clrToGC: *const IGCToCLR,
     _gcHeap: *mut *const IGCHeap,
-    _gcHandleManager: *mut *const IGCHandleManager,
+    gcHandleManager: *mut *const IGCHandleManager,
     _gcDescVars: *mut GcDescVars) -> u32 {
     println!("GC_Initialize!");
+
+    unsafe {
+        let gc = heap_alloc(RustGc::new());
+        *gcHandleManager = heap_alloc(IGCHandleManager::new(gc))
+    }
     0x80004005
 }
 
