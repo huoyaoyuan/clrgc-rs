@@ -56,6 +56,23 @@ impl RustGc {
                 }
             });
         println!("Encountered totally {} roots during scan.", c);
+
+        let mut heap_count : i32 = 0;
+        let mut heap_bytes : u32 = 0;
+        {
+            let r = self.segments.read().unwrap();
+            for seg in r.iter() {
+                seg.for_each_obj(|or| {
+                    unsafe {
+                        println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
+                        println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
+                        heap_count += 1;
+                        heap_bytes += (*or).total_size();
+                    }
+                });
+            }
+        }
+        println!("Encountered totally {} objects on heap. Total size: {} bytes.", heap_count, heap_bytes);
         
         println!("Resuming EE");
         self.clr.gc_done(generation);
