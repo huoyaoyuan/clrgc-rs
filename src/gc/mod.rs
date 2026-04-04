@@ -1,9 +1,9 @@
 use std::{sync::{Arc, RwLock}, vec};
 
-pub use handle_manager::{ObjectHandle, HandleManager};
+pub use handle_manager::HandleManager;
 pub use segment::Segment;
 use crate::gcinterface::{GCToCLR, IGCToCLR, ScanFlags, SuspendReason};
-use crate::ObjectRef;
+use crate::objects::ObjectRef;
 
 mod handle_manager;
 mod segment;
@@ -51,9 +51,7 @@ impl RustGc {
                     }
                      else {
                         let mt = (**or).method_table;
-                        let has_component_size = (*mt).flags_high & 0x8000 != 0;
-                        let total_size = (*mt).base_size + if has_component_size { (*mt).component_size as u32 * (**or).component_count } else { 0 };
-                        println!("Has ComponentSize: {}, ComponentSize: {}, ComponentCount: {}, Total Size: {}", has_component_size, (*mt).component_size, (**or).component_count, total_size);
+                        println!("Has ComponentSize: {}, ComponentSize: {}, ComponentCount: {}, Total Size: {}", (**or).has_component_size(), (*mt).component_size, (**or).component_count, (**or).total_size());
                     }
                 }
             });

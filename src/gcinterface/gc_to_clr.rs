@@ -2,7 +2,7 @@ use std::ffi::{c_char, c_void};
 use bitflags::bitflags;
 
 use super::gc_heap::gc_alloc_context;
-use crate::ObjectRef;
+use crate::objects::ObjectRef;
 
 #[repr(C)]
 pub struct IGCToCLR {

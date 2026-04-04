@@ -1,11 +1,10 @@
 use std::ffi::c_char;
-use crate::gc::{RustGc, ObjectHandle};
+use crate::gc::RustGc;
 use crate::gcinterface::{GcDescVars, IGCHandleManager, IGCHeap, IGCToCLR};
-use crate::types::{Object, ObjectRef, HandleType};
 
 mod gc;
 mod gcinterface;
-mod types;
+mod objects;
 
 unsafe fn heap_alloc<T>(value: T) -> *mut T {
     let b = Box::new(value);

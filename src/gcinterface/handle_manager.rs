@@ -1,6 +1,6 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use crate::{ObjectHandle, ObjectRef, HandleType};
+use crate::objects::{ObjectHandle, ObjectRef, HandleType};
 use crate::gc::RustGc;
 
 #[repr(C)]

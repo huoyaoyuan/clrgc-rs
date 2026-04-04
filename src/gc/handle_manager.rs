@@ -1,15 +1,5 @@
 use std::sync::RwLock;
-use crate::{ObjectRef, HandleType};
-
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct GcHandle {
-    pub object: ObjectRef,
-    pub extra_or_secondary: usize,
-    pub handle_type: HandleType,
-}
-
-pub type ObjectHandle = *mut GcHandle;
+use crate::objects::{GcHandle, HandleType, ObjectHandle, ObjectRef};
 
 pub struct HandleManager {
     handle_table: RwLock<HandleTable>,
