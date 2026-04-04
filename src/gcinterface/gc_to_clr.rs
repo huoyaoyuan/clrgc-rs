@@ -21,8 +21,6 @@ pub struct ScanContext {
     _unused3: i32,
 }
 
-type promote_func = extern "system" fn(ppObject: *const ObjectRef, sc: *const ScanContext, flags: u32);
-
 #[repr(i32)]
 pub enum SuspendReason {
     GC = 1,
@@ -62,7 +60,7 @@ pub struct WriteBarrierParameters {
 struct IGCToClrVTable {
     SuspendEE: extern "system" fn(this: *const IGCToCLR, reason: SuspendReason),
     RestartEE: extern "system" fn(this: *const IGCToCLR, bFinishedGC: bool),
-    GcScanRoots: extern "system" fn(this: *const IGCToCLR, func: promote_func, condemned: i32, max_gen: i32, sc: *const ScanContext),
+    GcScanRoots: extern "system" fn(this: *const IGCToCLR, func: extern "system" fn(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: u32), condemned: i32, max_gen: i32, sc: *const ScanContext),
     GcStartWork: extern "system" fn(this: *const IGCToCLR, condemned: i32, max_gen: i32),
     BeforeGcScanRoots: extern "system" fn(this: *const IGCToCLR, condemned: i32, is_bgc: bool, is_concurrent: bool),
     AfterGcScanRoots: extern "system" fn(this: *const IGCToCLR, condemned: i32, is_bgc: bool, sc: *const ScanContext),
@@ -108,17 +106,17 @@ impl GCToCLR {
         (self.vtable().RestartEE)(self.ptr, finished_gc)
     }
 
-    pub fn scan_roots<F>(&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) where F: FnMut(&ObjectRef, &ScanContext, u32) {
+    pub fn scan_roots<F>(&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) where F: FnMut(&mut ObjectRef, &ScanContext, u32) {
         (self.vtable().BeforeGcScanRoots)(self.ptr, generation, is_bgc, is_concurrent);
 
         let mut sc = ScanContext::default();
         sc.promotion = promotion;
         sc._unused1 = &mut callback as *mut F as usize;
 
-        extern "system" fn scan_callback<F>(ppObject: *const ObjectRef, sc: *const ScanContext, flags: u32) where F: FnMut(&ObjectRef, &ScanContext, u32) {
+        extern "system" fn scan_callback<F>(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: u32) where F: FnMut(&mut ObjectRef, &ScanContext, u32) {
             unsafe {
                 let action = (*sc)._unused1 as *mut F;
-                (*action)(&*ppObject, &*sc, flags);
+                (*action)(&mut *ppObject, &*sc, flags);
             }
         }
         (self.vtable().GcScanRoots)(self.ptr, scan_callback::<F>, generation, max_gen, &sc);

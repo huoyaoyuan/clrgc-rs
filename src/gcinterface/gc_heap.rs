@@ -43,7 +43,7 @@ pub struct IGCHeapVTable {
     // GetNumberOfFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> isize,
     // GetNextFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> ObjectRef,
     // BCL rountines
-    bcl: [DummyFunc; 22],
+    bcl: [DummyFunc; 16],
     // GetMemoryInfo: unsafe extern "system" fn(this: *mut IGCHeap,
     //     highMemLoadThresholdBytes: *mut u64,
     //     totalAvailableMemoryBytes: *mut u64,
@@ -77,7 +77,8 @@ pub struct IGCHeapVTable {
     // EndNoGCRegion: unsafe extern "system" fn(this: *mut IGCHeap) -> i32,
     // GetTotalBytesInUse: unsafe extern "system" fn(this: *mut IGCHeap) -> isize,
     // GetTotalAllocatedBytes: unsafe extern "system" fn(this: *mut IGCHeap) -> i64,
-    // GarbageCollect: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, low_memory_p: bool, mode: i32) -> u32,
+    GarbageCollect: extern "system" fn(this: *mut IGCHeap, generation: i32, low_memory_p: bool, mode: i32) -> u32,
+    bcl2: [DummyFunc; 5],
     // GetMaxGeneration: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
     // SetFinalizationRun: unsafe extern "system" fn(this: *mut IGCHeap, obj: ObjectRef),
     // RegisterForFinalization: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, obj: ObjectRef) -> bool,
@@ -123,6 +124,11 @@ fn get_gc(this: *mut IGCHeap) -> &'static mut RustGc {
     unsafe { &mut *(*this).gc }
 }
 
+extern "system" fn GCHeap_GarbageCollect(this: *mut IGCHeap, generation: i32, _low_memory_p: bool, _mode: i32) -> u32 {
+    get_gc(this).do_collect(generation);
+    0
+}
+
 extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     println!("GCHeap::Initialize");
 
@@ -143,6 +149,8 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
         context.alloc_ptr = new_ptr;
         obj
     } else {
+        // Trigger a GC for each new segment
+        get_gc(this).do_collect(0);
         let segment_size = max(size, 32 * 1024);
         let segment = get_gc(this).add_segment(segment_size);
         let new_segment = segment.data.as_ptr() as usize;
@@ -157,7 +165,9 @@ const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
     hosting: [nop; 4],
     concurrent: [nop; 6],
     finalization: [nop; 2],
-    bcl: [nop; 22],
+    bcl: [nop; 16],
+    GarbageCollect: GCHeap_GarbageCollect,
+    bcl2: [nop; 5],
     Initialize: GCHeap_Initialize,
     vm: [nop; 15],
     timing: [nop; 3],
