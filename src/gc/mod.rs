@@ -2,7 +2,8 @@ use std::{sync::{Arc, RwLock}, vec};
 
 pub use handle_manager::{ObjectHandle, HandleManager};
 pub use segment::Segment;
-use crate::gcinterface::{GCToCLR, IGCToCLR, SuspendReason};
+use crate::gcinterface::{GCToCLR, IGCToCLR, ScanFlags, SuspendReason};
+use crate::ObjectRef;
 
 mod handle_manager;
 mod segment;
@@ -39,8 +40,22 @@ impl RustGc {
 
         let mut c : i32 = 0;
         self.clr.scan_roots(generation, 2, true, false, false,
-            |_or, _sc, _f| {
+            |or, _sc, f| {
                 c += 1;
+                unsafe {
+                    print!("Root at {:016x}, object: {:016x}, ", or as *const ObjectRef as usize, *or as usize);
+                    if (*or).is_null() {
+                        println!("null");
+                    } else if f.contains(ScanFlags::MayBeInterior) {
+                        println!("interior");
+                    }
+                     else {
+                        let mt = (**or).method_table;
+                        let has_component_size = (*mt).flags_high & 0x8000 != 0;
+                        let total_size = (*mt).base_size + if has_component_size { (*mt).component_size as u32 * (**or).component_count } else { 0 };
+                        println!("Has ComponentSize: {}, ComponentSize: {}, ComponentCount: {}, Total Size: {}", has_component_size, (*mt).component_size, (**or).component_count, total_size);
+                    }
+                }
             });
         println!("Encountered totally {} roots during scan.", c);
         

@@ -1,7 +1,14 @@
 #[repr(C)]
 pub struct Object {
-    method_table: usize,
-    component_count: i32,
+    pub method_table: *const MethodTable,
+    pub component_count: u32,
+}
+
+#[repr(C)]
+pub struct MethodTable {
+    pub component_size: u16,
+    pub flags_high: u16,
+    pub base_size: u32,
 }
 
 pub type ObjectRef = *mut Object;

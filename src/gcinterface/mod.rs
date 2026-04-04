@@ -5,7 +5,7 @@ mod gc_to_clr;
 mod handle_manager;
 
 pub use gc_heap::IGCHeap;
-pub use gc_to_clr::{IGCToCLR, GCToCLR, SuspendReason, ScanContext};
+pub use gc_to_clr::{IGCToCLR, GCToCLR, SuspendReason, ScanContext, ScanFlags};
 pub use handle_manager::IGCHandleManager;
 
 #[repr(C)]

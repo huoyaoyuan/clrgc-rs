@@ -1,4 +1,6 @@
 use std::ffi::{c_char, c_void};
+use bitflags::bitflags;
+
 use super::gc_heap::gc_alloc_context;
 use crate::ObjectRef;
 
@@ -19,6 +21,15 @@ pub struct ScanContext {
     _unused1: usize,
     pMD: usize,
     _unused3: i32,
+}
+
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub struct ScanFlags : i32 {
+        const MayBeInterior = 1;
+        const Pinned = 2;
+    }
 }
 
 #[repr(i32)]
@@ -60,7 +71,7 @@ pub struct WriteBarrierParameters {
 struct IGCToClrVTable {
     SuspendEE: extern "system" fn(this: *const IGCToCLR, reason: SuspendReason),
     RestartEE: extern "system" fn(this: *const IGCToCLR, bFinishedGC: bool),
-    GcScanRoots: extern "system" fn(this: *const IGCToCLR, func: extern "system" fn(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: u32), condemned: i32, max_gen: i32, sc: *const ScanContext),
+    GcScanRoots: extern "system" fn(this: *const IGCToCLR, func: extern "system" fn(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: ScanFlags), condemned: i32, max_gen: i32, sc: *const ScanContext),
     GcStartWork: extern "system" fn(this: *const IGCToCLR, condemned: i32, max_gen: i32),
     BeforeGcScanRoots: extern "system" fn(this: *const IGCToCLR, condemned: i32, is_bgc: bool, is_concurrent: bool),
     AfterGcScanRoots: extern "system" fn(this: *const IGCToCLR, condemned: i32, is_bgc: bool, sc: *const ScanContext),
@@ -106,14 +117,14 @@ impl GCToCLR {
         (self.vtable().RestartEE)(self.ptr, finished_gc)
     }
 
-    pub fn scan_roots<F>(&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) where F: FnMut(&mut ObjectRef, &ScanContext, u32) {
+    pub fn scan_roots<F>(&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) where F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags) {
         (self.vtable().BeforeGcScanRoots)(self.ptr, generation, is_bgc, is_concurrent);
 
         let mut sc = ScanContext::default();
         sc.promotion = promotion;
         sc._unused1 = &mut callback as *mut F as usize;
 
-        extern "system" fn scan_callback<F>(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: u32) where F: FnMut(&mut ObjectRef, &ScanContext, u32) {
+        extern "system" fn scan_callback<F>(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: ScanFlags) where F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags) {
             unsafe {
                 let action = (*sc)._unused1 as *mut F;
                 (*action)(&mut *ppObject, &*sc, flags);
