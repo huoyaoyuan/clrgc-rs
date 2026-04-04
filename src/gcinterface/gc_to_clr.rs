@@ -1,6 +1,6 @@
 use std::ffi::{c_char, c_void};
 use super::gc_heap::gc_alloc_context;
-use crate::Object;
+use crate::ObjectRef;
 
 #[repr(C)]
 pub struct IGCToCLR {
@@ -8,6 +8,7 @@ pub struct IGCToCLR {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub struct ScanContext {
     thread_under_crawl: isize,
     thread_number: i32,
@@ -15,17 +16,17 @@ pub struct ScanContext {
     stack_limit: usize,
     promotion: bool,
     concurrent: bool,
-    _unused1: isize,
-    pMD: isize,
+    _unused1: usize,
+    pMD: usize,
     _unused3: i32,
 }
 
-type promote_func = unsafe extern "system" fn(ppObject: *const *mut Object, sc: *const ScanContext, flags: u32);
+type promote_func = extern "system" fn(ppObject: *const ObjectRef, sc: *const ScanContext, flags: u32);
 
 #[repr(i32)]
-pub enum SUSPEND_REASON {
-    SUSPEND_FOR_GC = 1,
-    SUSPEND_FOR_GC_PREP = 6,
+pub enum SuspendReason {
+    GC = 1,
+    GCPrep = 6,
 }
 
 #[repr(i32)]
@@ -59,7 +60,7 @@ pub struct WriteBarrierParameters {
 
 #[repr(C)]
 struct IGCToClrVTable {
-    SuspendEE: extern "system" fn(this: *const IGCToCLR, reason: SUSPEND_REASON),
+    SuspendEE: extern "system" fn(this: *const IGCToCLR, reason: SuspendReason),
     RestartEE: extern "system" fn(this: *const IGCToCLR, bFinishedGC: bool),
     GcScanRoots: extern "system" fn(this: *const IGCToCLR, func: promote_func, condemned: i32, max_gen: i32, sc: *const ScanContext),
     GcStartWork: extern "system" fn(this: *const IGCToCLR, condemned: i32, max_gen: i32),
@@ -76,8 +77,8 @@ struct IGCToClrVTable {
     DisablePreemptiveGC: extern "system" fn(this: *const IGCToCLR) -> bool,
     GetThread: extern "system" fn(this: *const IGCToCLR) -> isize,
     GetAllocContext: extern "system" fn(this: *const IGCToCLR) -> *const gc_alloc_context,
-    GcEnumAllocContexts: extern "system" fn(this: *const IGCToCLR, func: extern "system" fn(*const gc_alloc_context, *const c_void), param: *const c_void),
-    GetLoaderAllocatorObjectForGC: extern "system" fn(this: *const IGCToCLR, object: *const Object) -> isize,
+    GcEnumAllocContexts: extern "system" fn(this: *const IGCToCLR, func: extern "system" fn(*const gc_alloc_context, usize), param: usize),
+    GetLoaderAllocatorObjectForGC: extern "system" fn(this: *const IGCToCLR, object: ObjectRef) -> isize,
     CreateThread: extern "system" fn(this: *const IGCToCLR, thread_start: extern "system" fn(*const c_void), arg: *const c_void, is_suspendable: bool, name: *const c_char),
     diag: [usize; 7],
     StompWriteBarrier: extern "system" fn(this: *const IGCToCLR, args: *const WriteBarrierParameters),
@@ -99,7 +100,7 @@ impl GCToCLR {
         }
     }
 
-    pub fn suspend_ee(&self, reason: SUSPEND_REASON) {
+    pub fn suspend_ee(&self, reason: SuspendReason) {
         (self.vtable().SuspendEE)(self.ptr, reason)
     }
 
@@ -107,20 +108,26 @@ impl GCToCLR {
         (self.vtable().RestartEE)(self.ptr, finished_gc)
     }
 
-    pub fn gc_scan_roots(&self, func: promote_func, generation: i32, max_gen: i32, scan_context: *const ScanContext) {
-        (self.vtable().GcScanRoots)(self.ptr, func, generation, max_gen, scan_context)
+    pub fn scan_roots<F>(&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) where F: FnMut(&ObjectRef, &ScanContext, u32) {
+        (self.vtable().BeforeGcScanRoots)(self.ptr, generation, is_bgc, is_concurrent);
+
+        let mut sc = ScanContext::default();
+        sc.promotion = promotion;
+        sc._unused1 = &mut callback as *mut F as usize;
+
+        extern "system" fn scan_callback<F>(ppObject: *const ObjectRef, sc: *const ScanContext, flags: u32) where F: FnMut(&ObjectRef, &ScanContext, u32) {
+            unsafe {
+                let action = (*sc)._unused1 as *mut F;
+                (*action)(&*ppObject, &*sc, flags);
+            }
+        }
+        (self.vtable().GcScanRoots)(self.ptr, scan_callback::<F>, generation, max_gen, &sc);
+
+        (self.vtable().AfterGcScanRoots)(self.ptr, generation, is_bgc, &sc);
     }
 
     pub fn gc_start_work(&self, generation: i32, max_gen: i32) {
         (self.vtable().GcStartWork)(self.ptr, generation, max_gen)
-    }
-
-    pub fn before_gc_scan_roots(&self, generation: i32, is_bgc: bool, is_concurrent: bool) {
-        (self.vtable().BeforeGcScanRoots)(self.ptr, generation, is_bgc, is_concurrent)
-    }
-
-    pub fn after_gc_scan_roots(&self, generation: i32, is_bgc: bool, scan_context: *const ScanContext) {
-        (self.vtable().AfterGcScanRoots)(self.ptr, generation, is_bgc, scan_context)
     }
 
     pub fn gc_done(&self, generation: i32) {
@@ -131,15 +138,14 @@ impl GCToCLR {
         unsafe { &*(self.vtable().GetAllocContext)(self.ptr) }
     }
 
-    pub fn for_each_alloc_context(&self, action: fn(&gc_alloc_context)) {
-        let closure = Box::new(action);
-        extern "system" fn callback(alloc_context: *const gc_alloc_context, param: *const c_void) {
+    pub fn for_each_alloc_context<F>(&self, mut action: F) where F: FnMut(&gc_alloc_context) {
+        extern "system" fn callback<F>(alloc_context: *const gc_alloc_context, param: usize) where F: FnMut(&gc_alloc_context) {
             unsafe {
-                let action = &*(param as *mut fn(&gc_alloc_context));
-                action(&*alloc_context);
+                let action = param as *mut F;
+                (*action)(&*alloc_context);
             }
         }
-        (self.vtable().GcEnumAllocContexts)(self.ptr, callback, Box::into_raw(closure) as *const c_void)
+        (self.vtable().GcEnumAllocContexts)(self.ptr, callback::<F>, &mut action as *mut F as usize)
     }
 
     pub fn stomp_write_barrier(&self, args: &WriteBarrierParameters) {
