@@ -1,19 +1,47 @@
-use bitvec::{bitvec, boxed::BitBox};
+use bitvec::{BitArr, bitarr, order::Lsb0};
 
 use crate::objects::ObjectRef;
 
 pub struct Segment {
-    pub size: usize,
-    pub data: Box<[u8]>,
-    mark: BitBox,
+    data: [u8; Self::SIZE],
+    mark: BitArr!(for Segment::FLAGS_SIZE, in u8, Lsb0),
+}
+
+pub trait Seg {
+    fn data(&self) -> &[u8];
+    fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef));
+    fn contains(&self, or: ObjectRef) -> bool;
+    fn find_object(&self, or: ObjectRef) -> Option<ObjectRef>;
+    fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()>;
+    fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
+    fn clear_mark(&mut self);
 }
 
 impl Segment {
-    pub fn new(size: usize) -> Self {
-        Self { size, data: Box::from_iter(vec![0; size]), mark: BitBox::from_iter(bitvec![0; size / size_of::<usize>()]) }
+    pub const SIZE : usize = 32768;
+    pub const FLAGS_SIZE : usize = Self::SIZE / size_of::<usize>();
+
+    pub fn new() -> Self {
+        Self { data: [0; Self::SIZE], mark: bitarr!(u8, Lsb0; 0; Segment::FLAGS_SIZE) }
     }
 
-    pub fn for_each_obj<F>(&self, mut callback: F) where F : FnMut(ObjectRef) {
+    fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
+        let range = self.data.as_ptr_range();
+        let bptr = or as *const u8;
+        if range.contains(&bptr) {
+            unsafe { Ok(bptr.offset_from(range.start) as usize / size_of::<usize>()) }
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl Seg for Segment {
+    fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef)) {
         let range = self.data.as_ptr_range();
         let mut ptr = &self.data[size_of::<usize>()] as *const u8;
         while range.contains(&ptr) {
@@ -26,27 +54,11 @@ impl Segment {
         }
     }
 
-    // pub fn iter_objects(&self) -> impl Iterator<Item = ObjectRef> {
-    //     let it = std::iter::iter!{|| {
-    //         let range = self.data.as_ptr_range();
-    //         let mut ptr = &self.data[size_of::<usize>()] as *const u8;
-    //         while range.contains(&ptr) {
-    //             let obj = unsafe { &*(ptr as ObjectRef) };
-    //             if obj.method_table.is_null() {
-    //                 return;
-    //             }
-    //             yield ptr as ObjectRef;
-    //             ptr = ptr.wrapping_add(obj.total_size_aligned());
-    //         }
-    //     } }();
-    //     it
-    // }
-
-    pub fn contains(&self, or: ObjectRef) -> bool {
+    fn contains(&self, or: ObjectRef) -> bool {
         self.data.as_ptr_range().contains(&(or as *const u8))
     }
 
-    pub fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
+    fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
         let range = self.data.as_ptr_range();
         let mut ptr = &self.data[size_of::<usize>()] as *const u8;
         while range.contains(&ptr) {
@@ -65,27 +77,75 @@ impl Segment {
         None
     }
 
-    fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
-        let range = self.data.as_ptr_range();
-        let bptr = or as *const u8;
-        if range.contains(&bptr) {
-            unsafe { Ok(bptr.offset_from(range.start) as usize / size_of::<usize>()) }
+    fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
+        let index = self.get_index(or)?;
+        Ok(!self.mark.replace(index, true))
+    }
+
+    fn is_marked(&self, or: ObjectRef) -> Result<bool, ()> {
+        let index = self.get_index(or)?;
+        Ok(self.mark[index])
+    }
+
+    fn clear_mark(&mut self) {
+        self.mark.fill(false);
+    }
+}
+
+pub struct LargeSegment {
+    data: Box<[u8]>,
+    alive: bool,
+    mark: bool,
+}
+
+impl LargeSegment {
+    pub fn new(size: usize) -> Self {
+        Self { data: Box::from_iter(vec![0; size]), alive: true, mark: false }
+    }
+
+    fn as_object_ref(&self) -> ObjectRef {
+        self.data[size_of::<usize>()] as ObjectRef
+    }
+}
+
+impl Seg for LargeSegment {
+    fn data(&self) -> &[u8] {
+        self.data.as_ref()
+    }
+
+    fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef)) {
+        if self.alive {
+            callback(self.as_object_ref());
+        }
+    }
+
+    fn contains(&self, or: ObjectRef) -> bool {
+        self.data.as_ptr_range().contains(&(or as *const u8))
+    }
+
+    fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
+        if self.contains(or) { Some(self.as_object_ref()) } else { None }
+    }
+
+    fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
+        if self.contains(or) {
+            let old = self.mark;
+            self.mark = true;
+            Ok(!old)
         } else {
             Err(())
         }
     }
 
-    pub fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
-        let index = self.get_index(or)?;
-        Ok(!self.mark.replace(index, true))
+    fn is_marked(&self, or: ObjectRef) -> Result<bool, ()> {
+        if self.contains(or) {
+            Ok(self.mark)
+        } else {
+            Err(())
+        }
     }
 
-    pub fn is_marked(&self, or: ObjectRef) -> Result<bool, ()> {
-        let index = self.get_index(or)?;
-        Ok(self.mark[index])
-    }
-
-    pub fn clear_mark(&mut self) {
-        self.mark.fill(false);
+    fn clear_mark(&mut self) {
+        self.mark = false;
     }
 }

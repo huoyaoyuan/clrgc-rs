@@ -2,12 +2,12 @@ use std::cell::UnsafeCell;
 use std::sync::Arc;
 use std::ops::{Deref, DerefMut};
 
-pub struct UnsafeRef<T> {
-    inner: Arc<UnsafeCell<T>>
+pub struct UnsafeRef<T: ?Sized> {
+    inner: Arc<UnsafeCell<Box<T>>>
 }
 
-impl<T> UnsafeRef<T> {
-    pub fn new(value: T) -> Self {
+impl<T: ?Sized> UnsafeRef<T> {
+    pub fn new(value: Box<T>) -> Self {
         Self { inner: Arc::new(UnsafeCell::new(value)) }
     }
 
@@ -16,13 +16,13 @@ impl<T> UnsafeRef<T> {
     }
 }
 
-impl<T> Clone for UnsafeRef<T> {
+impl<T: ?Sized> Clone for UnsafeRef<T> {
     fn clone(&self) -> Self {
         Self { inner: self.inner.clone() }
     }
 }
 
-impl<T> Deref for UnsafeRef<T> {
+impl<T: ?Sized> Deref for UnsafeRef<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -30,7 +30,7 @@ impl<T> Deref for UnsafeRef<T> {
     }
 }
 
-impl<T> DerefMut for UnsafeRef<T> {
+impl<T: ?Sized> DerefMut for UnsafeRef<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.get_mut()
     }

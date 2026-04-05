@@ -3,7 +3,7 @@ use std::sync::RwLock;
 use std::vec;
 
 pub use handle_manager::HandleManager;
-pub use segment::Segment;
+pub use segment::{Seg, Segment, LargeSegment};
 use unsafe_ref::UnsafeRef;
 use crate::gcinterface::{GCToCLR, IGCToCLR, ScanFlags, SuspendReason};
 use crate::objects::ObjectRef;
@@ -15,7 +15,7 @@ mod unsafe_ref;
 pub struct RustGc {
     pub clr: GCToCLR,
     pub handle_manager: HandleManager,
-    segments: RwLock<Vec<UnsafeRef<Segment>>>,
+    segments: RwLock<Vec<UnsafeRef<dyn Seg>>>,
 }
 
 impl RustGc {
@@ -27,11 +27,17 @@ impl RustGc {
         }
     }
 
-    pub fn add_segment(&mut self, size: usize) -> UnsafeRef<Segment> {
+    pub fn add_segment(&mut self, size: usize) -> UnsafeRef<dyn Seg> {
+        let new_seg : Box<dyn Seg> =
+            if size <= Segment::SIZE {
+                Box::new(Segment::new())
+            } else {
+                Box::new(LargeSegment::new(size))
+            };
+        let r = UnsafeRef::new(new_seg);
         let mut w = self.segments.write().unwrap();
-        w.push(UnsafeRef::new(Segment::new(size)));
-        let r = w.last().unwrap();
-        r.clone()
+        w.push(r.clone());
+        r
     }
 
     pub fn try_find_interior(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
@@ -78,7 +84,7 @@ impl RustGc {
         {
             let r = self.segments.read().unwrap();
             for seg in r.iter() {
-                seg.for_each_obj(|or| {
+                seg.for_each_obj(&mut |or| {
                     unsafe {
                         // println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
                         // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
