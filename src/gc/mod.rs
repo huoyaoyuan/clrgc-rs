@@ -1,17 +1,20 @@
-use std::{sync::{Arc, RwLock}, vec};
+use std::sync::RwLock;
+use std::vec;
 
 pub use handle_manager::HandleManager;
 pub use segment::Segment;
+use unsafe_ref::UnsafeRef;
 use crate::gcinterface::{GCToCLR, IGCToCLR, ScanFlags, SuspendReason};
 use crate::objects::ObjectRef;
 
 mod handle_manager;
 mod segment;
+mod unsafe_ref;
 
 pub struct RustGc {
     pub clr: GCToCLR,
     pub handle_manager: HandleManager,
-    segments: RwLock<Vec<Arc<Segment>>>,
+    segments: RwLock<Vec<UnsafeRef<Segment>>>,
 }
 
 impl RustGc {
@@ -23,11 +26,11 @@ impl RustGc {
         }
     }
 
-    pub fn add_segment(&mut self, size: usize) -> Arc<Segment> {
+    pub fn add_segment(&mut self, size: usize) -> UnsafeRef<Segment> {
         let mut w = self.segments.write().unwrap();
-        w.push(Arc::new(Segment::new(size)));
-        let arc = w.last().unwrap();
-        arc.clone()
+        w.push(UnsafeRef::new(Segment::new(size)));
+        let r = w.last().unwrap();
+        r.clone()
     }
 
     pub fn try_find_interior(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
