@@ -34,7 +34,7 @@ impl HandleManager {
 
     pub fn duplicate_handle(&mut self, handle: ObjectHandle) -> ObjectHandle {
         let mut w = self.handle_table.write().unwrap();
-        let h = unsafe { *(handle as *const GcHandle) };
+        let h = unsafe { *handle };
         let idx = w.used_handles;
         w.handles[idx] = h;
         w.used_handles = idx + 1;
@@ -43,7 +43,6 @@ impl HandleManager {
 
     pub fn destroy_handle(&mut self, handle: ObjectHandle) {
         let _w = self.handle_table.write().unwrap();
-        let h = handle as *mut GcHandle;
-        unsafe { *h = GcHandle::default() };
+        unsafe { *handle = GcHandle::default() };
     }
 }

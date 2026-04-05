@@ -122,7 +122,7 @@ impl GCToCLR {
 
         let mut sc = ScanContext::default();
         sc.promotion = promotion;
-        sc._unused1 = &mut callback as *mut F as usize;
+        sc._unused1 = &raw mut callback as usize;
 
         extern "system" fn scan_callback<F>(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: ScanFlags) where F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags) {
             unsafe {
@@ -154,7 +154,7 @@ impl GCToCLR {
                 (*action)(&*alloc_context);
             }
         }
-        (self.vtable().GcEnumAllocContexts)(self.ptr, callback::<F>, &mut action as *mut F as usize)
+        (self.vtable().GcEnumAllocContexts)(self.ptr, callback::<F>, &raw mut action as usize)
     }
 
     pub fn stomp_write_barrier(&self, args: &WriteBarrierParameters) {
