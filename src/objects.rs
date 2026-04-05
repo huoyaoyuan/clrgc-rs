@@ -13,15 +13,26 @@ pub struct MethodTable {
 
 pub type ObjectRef = *mut Object;
 
+fn align_to_ptr(size: u32) -> usize {
+    let mask = size_of::<usize>() - 1;
+    (size as usize + mask) & !mask
+}
+
 impl Object {
     pub fn has_component_size(&self) -> bool {
         let mt = unsafe { &*self.method_table };
         mt.flags_high & 0x8000 != 0
     }
 
+    #[inline]
     pub fn total_size(&self) -> u32 {
         let mt = unsafe { &*self.method_table };
         mt.base_size + if self.has_component_size() { mt.component_size as u32 * self.component_count } else { 0 }
+    }
+
+    #[inline]
+    pub fn total_size_aligned(&self) -> usize {
+        align_to_ptr(self.total_size())
     }
 }
 

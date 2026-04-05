@@ -5,11 +5,6 @@ pub struct Segment {
     pub data: Box<[u8]>
 }
 
-fn align_to_ptr(size: u32) -> usize {
-    let mask = size_of::<usize>() - 1;
-    (size as usize + mask) & !mask
-}
-
 impl Segment {
     pub fn new(size: usize) -> Self {
         Self { size, data: Box::from_iter(vec![0; size]) }
@@ -24,7 +19,7 @@ impl Segment {
                 return;
             }
             callback(ptr as ObjectRef);
-            ptr = ptr.wrapping_add(align_to_ptr(obj.total_size()));
+            ptr = ptr.wrapping_add(obj.total_size_aligned());
         }
     }
 
@@ -38,7 +33,7 @@ impl Segment {
     //                 return;
     //             }
     //             yield ptr as ObjectRef;
-    //             ptr = ptr.wrapping_add(align_to_ptr(obj.total_size()));
+    //             ptr = ptr.wrapping_add(obj.total_size_aligned());
     //         }
     //     } }();
     //     it
@@ -56,7 +51,7 @@ impl Segment {
             if obj.method_table.is_null() {
                 return None;
             }
-            let next_ptr = ptr.wrapping_add(align_to_ptr(obj.total_size()));
+            let next_ptr = ptr.wrapping_add(obj.total_size_aligned());
             let bptr = or as *const u8;
             if ptr <= bptr && next_ptr > bptr {
                 return Some(ptr as ObjectRef);

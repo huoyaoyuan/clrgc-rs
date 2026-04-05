@@ -46,21 +46,20 @@ impl RustGc {
 
         let mut c : i32 = 0;
         self.clr.scan_roots(generation, 2, true, false, false,
-            |or, _sc, f| {
+            |pp_obj, _sc, f| {
                 c += 1;
                 unsafe {
-                    print!("Root at {:016x}, object: {:016x}, ", or as *const ObjectRef as usize, *or as usize);
-                    if (*or).is_null() {
+                    print!("Root at {:016x}, object: {:016x}, ", pp_obj as *const ObjectRef as usize, *pp_obj as usize);
+                    if (*pp_obj).is_null() {
                         println!("null");
                     } else if f.contains(ScanFlags::MayBeInterior) {
-                        match self.try_find_interior(*or) {
+                        match self.try_find_interior(*pp_obj) {
                             None => println!("interior: not on heap"),
                             Some(obj) => println!("interior of {:016x}, Total Size: {}", obj as usize, (*obj).total_size()),
                         };
                     }
                      else {
-                        let mt = (**or).method_table;
-                        println!("Has ComponentSize: {}, ComponentSize: {}, ComponentCount: {}, Total Size: {}", (**or).has_component_size(), (*mt).component_size, (**or).component_count, (**or).total_size());
+                        println!("Total Size: {}", (**pp_obj).total_size());
                     }
                 }
             });
