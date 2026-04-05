@@ -1,13 +1,16 @@
+use bitvec::{bitvec, boxed::BitBox};
+
 use crate::objects::ObjectRef;
 
 pub struct Segment {
     pub size: usize,
-    pub data: Box<[u8]>
+    pub data: Box<[u8]>,
+    mark: BitBox,
 }
 
 impl Segment {
     pub fn new(size: usize) -> Self {
-        Self { size, data: Box::from_iter(vec![0; size]) }
+        Self { size, data: Box::from_iter(vec![0; size]), mark: BitBox::from_iter(bitvec![0; size / size_of::<usize>()]) }
     }
 
     pub fn for_each_obj<F>(&self, mut callback: F) where F : FnMut(ObjectRef) {
@@ -60,5 +63,29 @@ impl Segment {
         }
 
         None
+    }
+
+    fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
+        let range = self.data.as_ptr_range();
+        let bptr = or as *const u8;
+        if range.contains(&bptr) {
+            unsafe { Ok(bptr.offset_from(range.start) as usize / size_of::<usize>()) }
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
+        let index = self.get_index(or)?;
+        Ok(!self.mark.replace(index, true))
+    }
+
+    pub fn is_marked(&self, or: ObjectRef) -> Result<bool, ()> {
+        let index = self.get_index(or)?;
+        Ok(self.mark[index])
+    }
+
+    pub fn clear_mark(&mut self) {
+        self.mark.fill(false);
     }
 }

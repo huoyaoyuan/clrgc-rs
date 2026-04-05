@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::RwLock;
 use std::vec;
 
@@ -39,6 +40,12 @@ impl RustGc {
         segment.find_object(or_maybe)
     }
 
+    fn mark_object(&self, or: ObjectRef) -> Result<bool, ()> {
+        let r = self.segments.write().unwrap();
+        let segment = r.iter().find(|s| { s.contains(or) } ).ok_or(())?;
+        segment.get_mut().mark_object(or)
+    }
+
     pub fn do_collect(&mut self, generation: i32) {
         println!("GC triggered for generation {}", generation);
         
@@ -47,29 +54,27 @@ impl RustGc {
 
         self.clr.gc_start_work(generation, 2);
 
-        let mut c : i32 = 0;
+        let mut mark_queue : VecDeque<ObjectRef> = VecDeque::new();
         self.clr.scan_roots(generation, 2, true, false, false,
             |pp_obj, _sc, f| {
-                c += 1;
-                unsafe {
-                    print!("Root at {:016x}, object: {:016x}, ", pp_obj as *const ObjectRef as usize, *pp_obj as usize);
+                let or =
                     if (*pp_obj).is_null() {
-                        println!("null");
+                        None
                     } else if f.contains(ScanFlags::MayBeInterior) {
-                        match self.try_find_interior(*pp_obj) {
-                            None => println!("interior: not on heap"),
-                            Some(obj) => println!("interior of {:016x}, Total Size: {}", obj as usize, (*obj).total_size()),
-                        };
-                    }
-                     else {
-                        println!("Total Size: {}", (**pp_obj).total_size());
-                    }
+                        self.try_find_interior(*pp_obj)
+                    } else {
+                        Some(*pp_obj)
+                    };
+
+                if let Some(obj) = or && self.mark_object(obj).unwrap_or(false) {
+                    mark_queue.push_back(obj);
                 }
             });
-        println!("Encountered totally {} roots during scan.", c);
+        println!("Encountered totally {} on-heap roots during scan.", mark_queue.len());
 
         let mut heap_count : i32 = 0;
         let mut heap_bytes : u32 = 0;
+        let mut marked_count : i32 = 0;
         {
             let r = self.segments.read().unwrap();
             for seg in r.iter() {
@@ -79,11 +84,19 @@ impl RustGc {
                         // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
                         heap_count += 1;
                         heap_bytes += (*or).total_size();
+                        if seg.is_marked(or).unwrap_or(false) { marked_count += 1; }
                     }
                 });
             }
         }
-        println!("Encountered totally {} objects on heap. Total size: {} bytes.", heap_count, heap_bytes);
+        println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}.", heap_count, heap_bytes, marked_count);
+
+        {
+            let mut w = self.segments.write().unwrap();
+            for seg in w.iter_mut() {
+                seg.clear_mark();
+            }
+        }
         
         println!("Resuming EE");
         self.clr.gc_done(generation);
