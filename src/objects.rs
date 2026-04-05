@@ -37,7 +37,7 @@ impl Object {
 }
 
 #[repr(i32)]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, PartialEq, Eq)]
 pub enum HandleType {
     #[default]
     Short = 0,

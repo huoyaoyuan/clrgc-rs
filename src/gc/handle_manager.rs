@@ -45,4 +45,16 @@ impl HandleManager {
         let _w = self.handle_table.write().unwrap();
         unsafe { *handle = GcHandle::default() };
     }
+
+    pub fn for_each_handle<F: FnMut(&GcHandle)>(&self, f: F) {
+        let r = self.handle_table.read().unwrap();
+        let used = r.used_handles;
+        r.handles.iter().take(used).for_each(f);
+    }
+
+    pub fn for_each_handle_mut<F: FnMut(&mut GcHandle)>(&mut self, f: F) {
+        let mut w = self.handle_table.write().unwrap();
+        let used = w.used_handles;
+        w.handles.iter_mut().take(used).for_each(f);
+    }
 }

@@ -6,7 +6,7 @@ pub use handle_manager::HandleManager;
 pub use segment::{Seg, Segment, LargeSegment};
 use unsafe_ref::UnsafeRef;
 use crate::gcinterface::{GCToCLR, IGCToCLR, ScanFlags, SuspendReason};
-use crate::objects::ObjectRef;
+use crate::objects::{HandleType, ObjectRef};
 
 mod handle_manager;
 mod segment;
@@ -61,6 +61,12 @@ impl RustGc {
         self.clr.gc_start_work(generation, 2);
 
         let mut mark_queue : VecDeque<ObjectRef> = VecDeque::new();
+        let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef| {
+            if self.mark_object(or).unwrap_or(false) {
+                mark_queue.push_back(or);
+            }
+        };
+
         self.clr.scan_roots(generation, 2, true, false, false,
             |pp_obj, _sc, f| {
                 let or =
@@ -72,11 +78,21 @@ impl RustGc {
                         Some(*pp_obj)
                     };
 
-                if let Some(obj) = or && self.mark_object(obj).unwrap_or(false) {
-                    mark_queue.push_back(obj);
+                if let Some(obj) = or {
+                    try_mark_push(&mut mark_queue, obj);
                 }
             });
-        println!("Encountered totally {} on-heap roots during scan.", mark_queue.len());
+        let stack_roots = mark_queue.len();
+        println!("Encountered {} roots from stack.", mark_queue.len());
+        self.handle_manager.for_each_handle(|h| {
+            if !h.object.is_null() {
+                try_mark_push(&mut mark_queue, h.object);
+            }
+            if h.handle_type == HandleType::Dependent && h.extra_or_secondary != 0 {
+                try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef);
+            }
+        });
+        println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
 
         let mut heap_count : i32 = 0;
         let mut heap_bytes : u32 = 0;
