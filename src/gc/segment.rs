@@ -27,4 +27,43 @@ impl Segment {
             ptr = ptr.wrapping_add(align_to_ptr(obj.total_size()));
         }
     }
+
+    // pub fn iter_objects(&self) -> impl Iterator<Item = ObjectRef> {
+    //     let it = std::iter::iter!{|| {
+    //         let range = self.data.as_ptr_range();
+    //         let mut ptr = &self.data[size_of::<usize>()] as *const u8;
+    //         while range.contains(&ptr) {
+    //             let obj = unsafe { &*(ptr as ObjectRef) };
+    //             if obj.method_table.is_null() {
+    //                 return;
+    //             }
+    //             yield ptr as ObjectRef;
+    //             ptr = ptr.wrapping_add(align_to_ptr(obj.total_size()));
+    //         }
+    //     } }();
+    //     it
+    // }
+
+    pub fn contains(&self, or: ObjectRef) -> bool {
+        self.data.as_ptr_range().contains(&(or as *const u8))
+    }
+
+    pub fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
+        let range = self.data.as_ptr_range();
+        let mut ptr = &self.data[size_of::<usize>()] as *const u8;
+        while range.contains(&ptr) {
+            let obj = unsafe { &*(ptr as ObjectRef) };
+            if obj.method_table.is_null() {
+                return None;
+            }
+            let next_ptr = ptr.wrapping_add(align_to_ptr(obj.total_size()));
+            let bptr = or as *const u8;
+            if ptr <= bptr && next_ptr > bptr {
+                return Some(ptr as ObjectRef);
+            }
+            ptr = next_ptr;
+        }
+
+        None
+    }
 }

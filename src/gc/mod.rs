@@ -30,6 +30,12 @@ impl RustGc {
         arc.clone()
     }
 
+    pub fn try_find_interior(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
+        let r = self.segments.read().unwrap();
+        let segment = r.iter().find(|s| { s.contains(or_maybe) })?;
+        segment.find_object(or_maybe)
+    }
+
     pub fn do_collect(&mut self, generation: i32) {
         println!("GC triggered for generation {}", generation);
         
@@ -47,7 +53,10 @@ impl RustGc {
                     if (*or).is_null() {
                         println!("null");
                     } else if f.contains(ScanFlags::MayBeInterior) {
-                        println!("interior");
+                        match self.try_find_interior(*or) {
+                            None => println!("interior: not on heap"),
+                            Some(obj) => println!("interior of {:016x}, Total Size: {}", obj as usize, (*obj).total_size()),
+                        };
                     }
                      else {
                         let mt = (**or).method_table;
@@ -64,8 +73,8 @@ impl RustGc {
             for seg in r.iter() {
                 seg.for_each_obj(|or| {
                     unsafe {
-                        println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
-                        println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
+                        // println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
+                        // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
                         heap_count += 1;
                         heap_bytes += (*or).total_size();
                     }
