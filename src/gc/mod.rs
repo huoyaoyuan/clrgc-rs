@@ -94,6 +94,13 @@ impl RustGc {
         });
         println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
 
+        while let Some(or) = mark_queue.pop_front() {
+            let obj = unsafe { &mut * or };
+            obj.for_each_obj_ref(|r| {
+                try_mark_push(&mut mark_queue, *r);
+            });
+        }
+
         let mut heap_count = 0;
         let mut heap_bytes = 0;
         let mut marked_count = 0;
