@@ -19,8 +19,9 @@ pub struct IGCHeap {
     gc: *mut RustGc,
 }
 
-type DummyFunc = extern "system" fn();
-extern "system" fn nop() {}
+type DummyFunc = extern "system" fn() -> usize;
+extern "system" fn nop() -> usize { 0 }
+extern "system" fn nop_ret_non_null() -> usize { 1 }
 
 #[repr(C)]
 pub struct IGCHeapVTable {
@@ -110,7 +111,7 @@ pub struct IGCHeapVTable {
     // Allocation routines
     Alloc: extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, flags: u32) -> ObjectRef,
     alloc: [DummyFunc; 3],
-    // PublishObject: unsafe extern "system" fn (this: *mut IGCHeap, obj: usize) -> ObjectRef,
+    // PublishObject: unsafe extern "system" fn (this: *mut IGCHeap, obj: usize),
     // SetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
     // ResetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
     verification: [DummyFunc; 4],
@@ -169,14 +170,14 @@ const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
     GarbageCollect: GCHeap_GarbageCollect,
     bcl2: [nop; 5],
     Initialize: GCHeap_Initialize,
-    vm: [nop; 15],
+    vm: [nop_ret_non_null; 15],
     timing: [nop; 3],
     Alloc: GCHeap_Alloc,
     alloc: [nop; 3],
     verification: [nop; 4],
     profiling: [nop; 11],
     stress_heap: nop,
-    frozen: [nop; 3],
+    frozen: [nop_ret_non_null, nop, nop],
     more: [nop; 13],
 };
 
