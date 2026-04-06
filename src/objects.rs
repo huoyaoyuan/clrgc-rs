@@ -18,6 +18,22 @@ struct GCDescSeries {
     pub offset: usize,
 }
 
+#[cfg(target_pointer_width = "64")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ValSeriesItem {
+    pub pointers: u32,
+    pub skip: u32,
+}
+
+#[cfg(target_pointer_width = "32")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ValSeriesItem {
+    pub pointers: u16,
+    pub skip: u16,
+}
+
 pub type ObjectRef = *mut Object;
 
 fn align_to_ptr(size: u32) -> usize {
@@ -65,7 +81,21 @@ impl Object {
                     }
                 }
             } else {
+                let component_size = (*self.method_table).component_size as usize;
+                let offset = *base_ptr.sub(1);
+                let val_series_base = base_ptr.sub(2) as *const ValSeriesItem;
+                let elements_base = (&raw mut self.method_table as *mut ObjectRef).byte_offset(offset);
 
+                for e in 0..self.component_count as usize {
+                    let mut element_ptr = elements_base.byte_add(e * component_size);
+                    for s in 0..(-series_count as usize) {
+                        let item = *val_series_base.sub(s);
+                        for i in 0..item.pointers as usize {
+                            f(&mut *element_ptr.add(i));
+                        }
+                        element_ptr = element_ptr.add(item.pointers as usize).byte_add(item.skip as usize);
+                    }
+                }
             }
         }
     }

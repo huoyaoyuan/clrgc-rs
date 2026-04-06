@@ -113,7 +113,7 @@ impl RustGc {
                         (*or).for_each_obj_ref(|field| {
                             field_count += 1;
                             if !field.is_null() {
-                                // println!("Non-null field at {:016x}, target: {:016x}", field as *const ObjectRef as usize, (*field) as usize);
+                                // println!("Non-null field at {:016x}, target: {:016x}, target MT: {:016x}", field as *const ObjectRef as usize, (*field) as usize, (**field).method_table as usize);
                                 non_null_field_count += 1;
                             }
                         });
