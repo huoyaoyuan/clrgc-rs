@@ -11,6 +11,13 @@ pub struct MethodTable {
     pub base_size: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GCDescSeries {
+    pub size: isize,
+    pub offset: usize,
+}
+
 pub type ObjectRef = *mut Object;
 
 fn align_to_ptr(size: u32) -> usize {
@@ -19,9 +26,12 @@ fn align_to_ptr(size: u32) -> usize {
 }
 
 impl Object {
+    const HAS_COMPONENT_SIZE: u16 = 0x8000;
+    const HAS_GC_POINTERS: u16 = 0x0100;
+
     pub fn has_component_size(&self) -> bool {
         let mt = unsafe { &*self.method_table };
-        mt.flags_high & 0x8000 != 0
+        mt.flags_high & Self::HAS_COMPONENT_SIZE != 0
     }
 
     #[inline]
@@ -33,6 +43,31 @@ impl Object {
     #[inline]
     pub fn total_size_aligned(&self) -> usize {
         align_to_ptr(self.total_size())
+    }
+
+    pub fn for_each_obj_ref<F: FnMut(&mut ObjectRef)>(&mut self, mut f: F) {
+        unsafe {
+            if (*self.method_table).flags_high & Self::HAS_GC_POINTERS == 0 {
+                return;
+            }
+            let base_ptr = (self.method_table as *const isize).sub(1);
+            let series_count = *base_ptr;
+
+            if series_count >= 0 {
+                for s in 1..series_count + 1 {
+                    let gc_desc_base = base_ptr as *const GCDescSeries;
+                    let series = *gc_desc_base.sub(s as usize);
+                    let field_count = (self.total_size_aligned() as isize + series.size) as usize / size_of::<usize>();
+                    let series_ptr = (&raw mut self.method_table as *mut ObjectRef).byte_add(series.offset);
+
+                    for i in 0..field_count {
+                        f(&mut *series_ptr.add(i));
+                    }
+                }
+            } else {
+
+            }
+        }
     }
 }
 

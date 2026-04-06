@@ -94,9 +94,11 @@ impl RustGc {
         });
         println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
 
-        let mut heap_count : i32 = 0;
-        let mut heap_bytes : u32 = 0;
-        let mut marked_count : i32 = 0;
+        let mut heap_count = 0;
+        let mut heap_bytes = 0;
+        let mut marked_count = 0;
+        let mut field_count = 0;
+        let mut non_null_field_count = 0;
         {
             let r = self.segments.read().unwrap();
             for seg in r.iter() {
@@ -107,11 +109,20 @@ impl RustGc {
                         heap_count += 1;
                         heap_bytes += (*or).total_size();
                         if seg.is_marked(or).unwrap_or(false) { marked_count += 1; }
+
+                        (*or).for_each_obj_ref(|field| {
+                            field_count += 1;
+                            if !field.is_null() {
+                                // println!("Non-null field at {:016x}, target: {:016x}", field as *const ObjectRef as usize, (*field) as usize);
+                                non_null_field_count += 1;
+                            }
+                        });
                     }
                 });
             }
         }
         println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}.", heap_count, heap_bytes, marked_count);
+        println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
 
         {
             let mut w = self.segments.write().unwrap();
