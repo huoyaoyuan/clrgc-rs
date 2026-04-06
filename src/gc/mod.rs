@@ -133,11 +133,34 @@ impl RustGc {
 
         {
             let mut w = self.segments.write().unwrap();
-            for seg in w.iter_mut() {
-                seg.clear_mark();
+            let mut i = 0;
+            while i < w.len() {
+                let seg = &mut w[i];
+                if seg.sweep() {
+                    seg.clear_mark();
+                    i += 1;
+                } else {
+                    println!("Removing empty segment at {:016x}", seg.data().as_ptr() as usize);
+                    w.remove(i);
+                }
             }
         }
         
+        let mut heap_count = 0;
+        let mut heap_bytes = 0;
+        {
+            let r = self.segments.read().unwrap();
+            for seg in r.iter() {
+                seg.for_each_obj(&mut |or| {
+                    unsafe {
+                        heap_count += 1;
+                        heap_bytes += (*or).total_size();
+                    }
+                });
+            }
+        }
+        println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
+
         println!("Resuming EE");
         self.clr.gc_done(generation);
         self.clr.restart_ee(true);

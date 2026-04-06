@@ -42,8 +42,15 @@ fn align_to_ptr(size: u32) -> usize {
 }
 
 impl Object {
-    const HAS_COMPONENT_SIZE: u16 = 0x8000;
-    const HAS_GC_POINTERS: u16 = 0x0100;
+    pub const HAS_COMPONENT_SIZE: u16 = 0x8000;
+    pub const HAS_GC_POINTERS: u16 = 0x0100;
+    pub const BASE_SIZE: usize = 3 * size_of::<usize>();
+
+    pub const EMPTY: MethodTable = MethodTable {
+        component_size: size_of::<usize>() as u16,
+        flags_high: Object::HAS_COMPONENT_SIZE,
+        base_size: Object::BASE_SIZE as u32,
+    };
 
     pub fn has_component_size(&self) -> bool {
         let mt = unsafe { &*self.method_table };

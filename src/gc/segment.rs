@@ -1,6 +1,6 @@
 use bitvec::{BitArr, order::Lsb0};
 
-use crate::objects::ObjectRef;
+use crate::objects::{Object, ObjectRef};
 
 pub struct Segment {
     data: [u8; Self::SIZE],
@@ -15,6 +15,7 @@ pub trait Seg {
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()>;
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
     fn clear_mark(&mut self);
+    fn sweep(&mut self) -> bool;
 }
 
 impl Segment {
@@ -49,7 +50,9 @@ impl Seg for Segment {
             if obj.method_table.is_null() {
                 return;
             }
-            callback(ptr as ObjectRef);
+            if obj.method_table != &Object::EMPTY {
+                callback(ptr as ObjectRef);
+            }
             ptr = ptr.wrapping_add(obj.total_size_aligned());
         }
     }
@@ -89,6 +92,49 @@ impl Seg for Segment {
 
     fn clear_mark(&mut self) {
         self.mark.fill(false);
+    }
+
+    fn sweep(&mut self) -> bool {
+        let mut alive = false;
+
+        let range = self.data.as_ptr_range();
+        let mut ptr = &self.data[size_of::<usize>()] as *const u8;
+        let mut empty_from: Option<ObjectRef> = None;
+
+        fn mark_as_empty(from: ObjectRef, to: ObjectRef) {
+            unsafe {
+                (*from) = Object {
+                    method_table: &Object::EMPTY,
+                    component_count: ((to.byte_offset_from_unsigned(from) - Object::BASE_SIZE) / size_of::<usize>()) as u32,
+                }
+            }
+        }
+
+        while range.contains(&ptr) {
+            let or = ptr as ObjectRef;
+            let obj = unsafe { &*or };
+            if obj.method_table.is_null() {
+                break;
+            }
+
+            if self.is_marked(or).unwrap() {
+                alive = true;
+                if let Some(last) = empty_from {
+                    mark_as_empty(last, or);
+                }
+                empty_from = None;
+            } else {
+                empty_from = empty_from.or(Some(or));
+            }
+
+            ptr = ptr.wrapping_add(obj.total_size_aligned());
+        }
+        
+        if let Some(last) = empty_from {
+            mark_as_empty(last, ptr as ObjectRef);
+        }
+
+        alive
     }
 }
 
@@ -147,5 +193,10 @@ impl Seg for LargeSegment {
 
     fn clear_mark(&mut self) {
         self.mark = false;
+    }
+
+    fn sweep(&mut self) -> bool {
+        self.alive = self.mark;
+        self.mark
     }
 }
