@@ -1,7 +1,6 @@
 use crate::gc::RustGc;
 use crate::gcinterface::gc_to_clr::{WriteBarrierOp, WriteBarrierParameters};
 use crate::objects::ObjectRef;
-use std::cmp::max;
 
 #[repr(C)]
 pub struct gc_alloc_context {

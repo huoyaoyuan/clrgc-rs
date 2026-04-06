@@ -1,4 +1,4 @@
-use bitvec::{BitArr, bitarr, order::Lsb0};
+use bitvec::{BitArr, order::Lsb0};
 
 use crate::objects::ObjectRef;
 
@@ -21,8 +21,8 @@ impl Segment {
     pub const SIZE : usize = 32768;
     pub const FLAGS_SIZE : usize = Self::SIZE / size_of::<usize>();
 
-    pub fn new() -> Self {
-        Self { data: [0; Self::SIZE], mark: bitarr!(u8, Lsb0; 0; Segment::FLAGS_SIZE) }
+    pub fn new_boxed() -> Box::<Self> {
+        unsafe { Box::new_zeroed().assume_init() }
     }
 
     fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {

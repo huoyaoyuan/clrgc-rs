@@ -30,7 +30,7 @@ impl RustGc {
     pub fn add_segment(&mut self, size: usize) -> UnsafeRef<dyn Seg> {
         let new_seg : Box<dyn Seg> =
             if size <= Segment::SIZE {
-                Box::new(Segment::new())
+                Segment::new_boxed()
             } else {
                 Box::new(LargeSegment::new(size))
             };
