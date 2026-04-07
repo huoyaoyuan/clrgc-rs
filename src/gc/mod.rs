@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::RwLock;
 use std::vec;
 
@@ -27,17 +28,17 @@ impl RustGc {
         }
     }
 
-    pub fn add_segment(&mut self, size: usize) -> UnsafeRef<dyn Seg> {
+    pub fn add_segment(&mut self, size: usize) -> Range<*const usize> {
         let new_seg : Box<dyn Seg> =
             if size <= Segment::SIZE {
                 Segment::new_boxed()
             } else {
                 Box::new(LargeSegment::new(size))
             };
-        let r = UnsafeRef::new(new_seg);
         let mut w = self.segments.write().unwrap();
-        w.push(r.clone());
-        r
+        let range = new_seg.data().as_ptr_range();
+        w.push(UnsafeRef::new(new_seg));
+        range
     }
 
     pub fn try_find_interior(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {

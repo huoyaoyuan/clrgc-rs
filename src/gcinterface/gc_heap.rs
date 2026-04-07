@@ -154,12 +154,11 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
         // Trigger a GC for each new segment
         get_gc(this).do_collect(0);
         let segment = get_gc(this).add_segment(size);
-        let new_segment = segment.data();
-        let segment_size: usize = segment.data().len() * size_of::<usize>();
-        println!("Allocated new segment at {:016x}, Length {}", new_segment.as_ptr() as usize, segment_size);
-        context.alloc_ptr = &raw const new_segment[1] as usize + size;
-        context.alloc_limit = new_segment.as_ptr_range().end as usize;
-        (&raw const new_segment[1]) as ObjectRef
+        println!("Allocated new segment at {:016x}, Length {}", segment.start as usize, unsafe { segment.end.byte_offset_from(segment.start) });
+        let obj_ptr = segment.start.wrapping_add(1);
+        context.alloc_ptr = obj_ptr as usize + size;
+        context.alloc_limit = segment.end as usize;
+        obj_ptr as ObjectRef
     }
 }
 
