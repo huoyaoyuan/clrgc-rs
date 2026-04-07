@@ -3,12 +3,12 @@ use bitvec::{BitArr, order::Lsb0};
 use crate::objects::{Object, ObjectRef};
 
 pub struct Segment {
-    data: [u8; Self::SIZE],
-    mark: BitArr!(for Segment::FLAGS_SIZE, in u8, Lsb0),
+    data: [usize; Self::FLAGS_SIZE],
+    mark: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
 }
 
 pub trait Seg {
-    fn data(&self) -> &[u8];
+    fn data(&self) -> &[usize];
     fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef));
     fn contains(&self, or: ObjectRef) -> bool;
     fn find_object(&self, or: ObjectRef) -> Option<ObjectRef>;
@@ -28,9 +28,9 @@ impl Segment {
 
     fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
         let range = self.data.as_ptr_range();
-        let bptr = or as *const u8;
+        let bptr = or as *const usize;
         if range.contains(&bptr) {
-            unsafe { Ok(bptr.offset_from(range.start) as usize / size_of::<usize>()) }
+            unsafe { Ok(bptr.offset_from(range.start) as usize) }
         } else {
             Err(())
         }
@@ -38,13 +38,13 @@ impl Segment {
 }
 
 impl Seg for Segment {
-    fn data(&self) -> &[u8] {
+    fn data(&self) -> &[usize] {
         &self.data
     }
 
     fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef)) {
         let range = self.data.as_ptr_range();
-        let mut ptr = &self.data[size_of::<usize>()] as *const u8;
+        let mut ptr = &raw const self.data[1];
         while range.contains(&ptr) {
             let obj = unsafe { &*(ptr as ObjectRef) };
             if obj.method_table.is_null() {
@@ -53,24 +53,24 @@ impl Seg for Segment {
             if obj.method_table != &Object::EMPTY {
                 callback(ptr as ObjectRef);
             }
-            ptr = ptr.wrapping_add(obj.total_size_aligned());
+            ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
         }
     }
 
     fn contains(&self, or: ObjectRef) -> bool {
-        self.data.as_ptr_range().contains(&(or as *const u8))
+        self.data.as_ptr_range().contains(&(or as *const usize))
     }
 
     fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
         let range = self.data.as_ptr_range();
-        let mut ptr = &self.data[size_of::<usize>()] as *const u8;
+        let bptr = or as *const usize;
+        let mut ptr = &raw const self.data[1];
         while range.contains(&ptr) {
             let obj = unsafe { &*(ptr as ObjectRef) };
             if obj.method_table.is_null() {
                 return None;
             }
-            let next_ptr = ptr.wrapping_add(obj.total_size_aligned());
-            let bptr = or as *const u8;
+            let next_ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
             if ptr <= bptr && next_ptr > bptr {
                 return Some(ptr as ObjectRef);
             }
@@ -98,7 +98,7 @@ impl Seg for Segment {
         let mut alive = false;
 
         let range = self.data.as_ptr_range();
-        let mut ptr = &self.data[size_of::<usize>()] as *const u8;
+        let mut ptr = &raw const self.data[1];
         let mut empty_from: Option<ObjectRef> = None;
 
         fn mark_as_empty(from: ObjectRef, to: ObjectRef) {
@@ -127,7 +127,7 @@ impl Seg for Segment {
                 empty_from = empty_from.or(Some(or));
             }
 
-            ptr = ptr.wrapping_add(obj.total_size_aligned());
+            ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
         }
         
         if let Some(last) = empty_from {
@@ -139,14 +139,15 @@ impl Seg for Segment {
 }
 
 pub struct LargeSegment {
-    data: Box<[u8]>,
+    data: Box<[usize]>,
     alive: bool,
     mark: bool,
 }
 
 impl LargeSegment {
     pub fn new(size: usize) -> Self {
-        Self { data: Box::from_iter(vec![0; size]), alive: true, mark: false }
+        assert!(size % size_of::<usize>() == 0);
+        Self { data: Box::from_iter(vec![0; size / size_of::<usize>()]), alive: true, mark: false }
     }
 
     fn as_object_ref(&self) -> ObjectRef {
@@ -155,7 +156,7 @@ impl LargeSegment {
 }
 
 impl Seg for LargeSegment {
-    fn data(&self) -> &[u8] {
+    fn data(&self) -> &[usize] {
         self.data.as_ref()
     }
 
@@ -166,7 +167,7 @@ impl Seg for LargeSegment {
     }
 
     fn contains(&self, or: ObjectRef) -> bool {
-        self.data.as_ptr_range().contains(&(or as *const u8))
+        self.data.as_ptr_range().contains(&(or as *const usize))
     }
 
     fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
