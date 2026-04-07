@@ -41,6 +41,12 @@ impl RustGc {
         range
     }
 
+    pub fn complete_segment(&mut self, segment_end: usize) {
+        let r = self.segments.write().unwrap();
+        let Some(segment) = r.iter().find(|s| { s.data().as_ptr_range().end as usize == segment_end }) else { return };
+        segment.get_mut().set_alloc_completed();
+    }
+
     pub fn try_find_interior(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
         let r = self.segments.read().unwrap();
         let segment = r.iter().find(|s| { s.contains(or_maybe) })?;
@@ -134,9 +140,13 @@ impl RustGc {
 
         {
             let mut w = self.segments.write().unwrap();
+            let mut incomplete = 0;
             let mut i = 0;
             while i < w.len() {
                 let seg = &mut w[i];
+                if !seg.get_alloc_completed() {
+                    incomplete += 1;
+                }
                 if seg.sweep() {
                     seg.clear_mark();
                     i += 1;
@@ -145,6 +155,7 @@ impl RustGc {
                     w.remove(i);
                 }
             }
+            println!("Segments ineligible for compact: {}", incomplete);
         }
         
         let mut heap_count = 0;

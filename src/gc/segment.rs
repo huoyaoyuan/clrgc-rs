@@ -5,6 +5,7 @@ use crate::objects::{Object, ObjectRef};
 pub struct Segment {
     data: [usize; Self::FLAGS_SIZE],
     mark: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
+    alloc_completed: bool,
 }
 
 pub trait Seg {
@@ -16,6 +17,8 @@ pub trait Seg {
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
     fn clear_mark(&mut self);
     fn sweep(&mut self) -> bool;
+    fn set_alloc_completed(&mut self);
+    fn get_alloc_completed(&self) -> bool;
 }
 
 impl Segment {
@@ -136,6 +139,14 @@ impl Seg for Segment {
 
         alive
     }
+    
+    fn set_alloc_completed(&mut self) {
+        self.alloc_completed = true;
+    }
+    
+    fn get_alloc_completed(&self) -> bool {
+        self.alloc_completed
+    }
 }
 
 pub struct LargeSegment {
@@ -200,4 +211,8 @@ impl Seg for LargeSegment {
         self.alive = self.mark;
         self.mark
     }
+    
+    fn set_alloc_completed(&mut self) { }
+    
+    fn get_alloc_completed(&self) -> bool { true }
 }
