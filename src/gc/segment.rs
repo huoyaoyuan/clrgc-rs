@@ -5,17 +5,21 @@ use crate::objects::{Object, ObjectRef};
 pub struct Segment {
     data: [usize; Self::FLAGS_SIZE],
     mark: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
+    finalization_pending: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
     alloc_completed: bool,
 }
 
 pub trait Seg {
     fn data(&self) -> &[usize];
     fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef));
+    fn for_each_obj_mut(&mut self, callback: &mut dyn FnMut(&mut dyn Seg, ObjectRef));
     fn contains(&self, or: ObjectRef) -> bool;
     fn find_object(&self, or: ObjectRef) -> Option<ObjectRef>;
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()>;
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
     fn clear_mark(&mut self);
+    fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()>;
+    fn get_finalization_pending(&self, or: ObjectRef) -> Result<bool, ()>;
     fn sweep(&mut self) -> bool;
     fn set_alloc_completed(&mut self);
     fn get_alloc_completed(&self) -> bool;
@@ -60,6 +64,21 @@ impl Seg for Segment {
         }
     }
 
+    fn for_each_obj_mut(&mut self, callback: &mut dyn FnMut(&mut dyn Seg, ObjectRef)) {
+        let range = self.data.as_ptr_range();
+        let mut ptr = &raw const self.data[1];
+        while range.contains(&ptr) {
+            let obj = unsafe { &*(ptr as ObjectRef) };
+            if obj.method_table.is_null() {
+                return;
+            }
+            if obj.method_table != &Object::EMPTY {
+                callback(self, ptr as ObjectRef);
+            }
+            ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
+        }
+    }
+
     fn contains(&self, or: ObjectRef) -> bool {
         self.data.as_ptr_range().contains(&(or as *const usize))
     }
@@ -97,6 +116,17 @@ impl Seg for Segment {
         self.mark.fill(false);
     }
 
+    fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()> {
+        let index = self.get_index(or)?;
+        self.finalization_pending.replace(index, pending);
+        Ok(())
+    }
+
+    fn get_finalization_pending(&self, or: ObjectRef) -> Result<bool, ()> {
+        let index = self.get_index(or)?;
+        Ok(self.finalization_pending[index])
+    }
+
     fn sweep(&mut self) -> bool {
         let mut alive = false;
 
@@ -115,12 +145,12 @@ impl Seg for Segment {
 
         while range.contains(&ptr) {
             let or = ptr as ObjectRef;
-            let obj = unsafe { &*or };
+            let obj = unsafe { &mut *or };
             if obj.method_table.is_null() {
                 break;
             }
 
-            if self.is_marked(or).unwrap() {
+            if self.is_marked(or).unwrap() || obj.needs_finalization() {
                 alive = true;
                 if let Some(last) = empty_from {
                     mark_as_empty(last, or);
@@ -153,16 +183,22 @@ pub struct LargeSegment {
     data: Box<[usize]>,
     alive: bool,
     mark: bool,
+    finalization_pending: bool
 }
 
 impl LargeSegment {
     pub fn new(size: usize) -> Self {
         assert!(size % size_of::<usize>() == 0);
-        Self { data: Box::from_iter(vec![0; size / size_of::<usize>()]), alive: true, mark: false }
+        Self {
+            data: Box::from_iter(vec![0; size / size_of::<usize>()]),
+            alive: true,
+            mark: false,
+            finalization_pending: false
+        }
     }
 
     fn as_object_ref(&self) -> ObjectRef {
-        self.data[size_of::<usize>()] as ObjectRef
+        &raw const self.data[1] as ObjectRef
     }
 }
 
@@ -173,7 +209,15 @@ impl Seg for LargeSegment {
 
     fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef)) {
         if self.alive {
-            callback(self.as_object_ref());
+            let or = self.as_object_ref();
+            callback(or);
+        }
+    }
+
+    fn for_each_obj_mut(&mut self, callback: &mut dyn FnMut(&mut dyn Seg, ObjectRef)) {
+        if self.alive {
+            let or = self.as_object_ref();
+            callback(self, or);
         }
     }
 
@@ -186,7 +230,7 @@ impl Seg for LargeSegment {
     }
 
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
-        if self.contains(or) {
+        if or == self.as_object_ref() {
             let old = self.mark;
             self.mark = true;
             Ok(!old)
@@ -196,7 +240,7 @@ impl Seg for LargeSegment {
     }
 
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()> {
-        if self.contains(or) {
+        if or == self.as_object_ref() {
             Ok(self.mark)
         } else {
             Err(())
@@ -207,9 +251,26 @@ impl Seg for LargeSegment {
         self.mark = false;
     }
 
+    fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()> {
+        if or == self.as_object_ref() {
+            self.finalization_pending = pending;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn get_finalization_pending(&self, or: ObjectRef) -> Result<bool, ()> {
+        if or == self.as_object_ref() {
+            Ok(self.finalization_pending)
+        } else {
+            Err(())
+        }
+    }
+
     fn sweep(&mut self) -> bool {
-        self.alive = self.mark;
-        self.mark
+        self.alive = unsafe { self.mark || (*self.as_object_ref()).needs_finalization() };
+        self.alive
     }
     
     fn set_alloc_completed(&mut self) { }

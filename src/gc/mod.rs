@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 use std::vec;
 
 pub use handle_manager::HandleManager;
@@ -17,6 +17,7 @@ pub struct RustGc {
     pub clr: GCToCLR,
     pub handle_manager: HandleManager,
     segments: RwLock<Vec<UnsafeRef<dyn Seg>>>,
+    finalization_queue: Mutex<VecDeque<ObjectRef>>,
 }
 
 impl RustGc {
@@ -25,6 +26,7 @@ impl RustGc {
             clr: GCToCLR::new(clr),
             handle_manager: HandleManager::new(),
             segments: RwLock::new(vec![]),
+            finalization_queue: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -54,7 +56,7 @@ impl RustGc {
     }
 
     fn mark_object(&self, or: ObjectRef) -> Result<bool, ()> {
-        let r = self.segments.write().unwrap();
+        let r = self.segments.read().unwrap();
         let segment = r.iter().find(|s| { s.contains(or) } ).ok_or(())?;
         segment.get_mut().mark_object(or)
     }
@@ -74,6 +76,7 @@ impl RustGc {
             }
         };
 
+        // Start mark phase
         self.clr.scan_roots(generation, 2, true, false, false,
             |pp_obj, _sc, f| {
                 let or =
@@ -103,9 +106,34 @@ impl RustGc {
 
         while let Some(or) = mark_queue.pop_front() {
             let obj = unsafe { &mut * or };
-            obj.for_each_obj_ref(|r| {
-                try_mark_push(&mut mark_queue, *r);
-            });
+                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
+        }
+
+        // Mark finalizables
+        {
+            // Lock early for finalization_pending
+            let mut q = self.finalization_queue.lock().unwrap();
+
+            let r = self.segments.read().unwrap();
+            let mut finalizables: VecDeque<ObjectRef> = VecDeque::new();
+            for seg in r.iter() {
+                seg.get_mut().for_each_obj_mut(&mut |seg, or| {
+                    let obj = unsafe { &mut *or };
+                    if !seg.is_marked(or).unwrap() && obj.needs_finalization() && !seg.get_finalization_pending(or).unwrap() {
+                        finalizables.push_back(or);
+                        seg.set_finalization_pending(or, true).unwrap();
+                        try_mark_push(&mut mark_queue, or);
+                    }
+                });
+            }
+            println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
+
+            while let Some(or) = mark_queue.pop_front() {
+                let obj = unsafe { &mut * or };
+                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
+            }
+
+            q.append(&mut finalizables);
         }
 
         let mut heap_count = 0;
@@ -138,6 +166,7 @@ impl RustGc {
         println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}.", heap_count, heap_bytes, marked_count);
         println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
 
+        // Start sweep phase
         {
             let mut w = self.segments.write().unwrap();
             let mut incomplete = 0;
