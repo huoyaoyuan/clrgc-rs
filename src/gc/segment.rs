@@ -150,7 +150,7 @@ impl Seg for Segment {
                 break;
             }
 
-            if self.is_marked(or).unwrap() || obj.needs_finalization() {
+            if self.is_marked(or).unwrap() {
                 alive = true;
                 if let Some(last) = empty_from {
                     mark_as_empty(last, or);

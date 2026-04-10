@@ -103,17 +103,18 @@ impl RustGc {
             }
         });
         println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
+        self.finalization_queue.lock().unwrap().iter()
+            .for_each(|f| try_mark_push(&mut mark_queue, *f));
 
         while let Some(or) = mark_queue.pop_front() {
             let obj = unsafe { &mut * or };
                 obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
         }
 
+        let has_finalizable;
+
         // Mark finalizables
         {
-            // Lock early for finalization_pending
-            let mut q = self.finalization_queue.lock().unwrap();
-
             let r = self.segments.read().unwrap();
             let mut finalizables: VecDeque<ObjectRef> = VecDeque::new();
             for seg in r.iter() {
@@ -126,14 +127,16 @@ impl RustGc {
                     }
                 });
             }
-            println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
 
             while let Some(or) = mark_queue.pop_front() {
                 let obj = unsafe { &mut * or };
                 obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
             }
 
+            let mut q = self.finalization_queue.lock().unwrap();
+            println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
             q.append(&mut finalizables);
+            has_finalizable = !q.is_empty();
         }
 
         let mut heap_count = 0;
@@ -205,5 +208,10 @@ impl RustGc {
         println!("Resuming EE");
         self.clr.gc_done(generation);
         self.clr.restart_ee(true);
+        self.clr.enable_finalization(has_finalizable);
+    }
+
+    pub fn pop_finalizable(&mut self) -> Option<ObjectRef> {
+        self.finalization_queue.lock().unwrap().pop_front()
     }
 }

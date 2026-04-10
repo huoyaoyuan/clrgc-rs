@@ -1,3 +1,4 @@
+use std::ptr::null_mut;
 use crate::gc::RustGc;
 use crate::gcinterface::gc_to_clr::{WriteBarrierOp, WriteBarrierParameters};
 use crate::objects::ObjectRef;
@@ -40,9 +41,8 @@ pub struct IGCHeapVTable {
     // IsConcurrentGCEnabled: unsafe extern "system" fn(this: *mut IGCHeap) -> bool,
     // WaitUntilConcurrentGCCompleteAsync: unsafe extern "system" fn(this: *mut IGCHeap, millisecondsTimeout: i32) -> u32,
     // Finalization
-    finalization: [DummyFunc; 2],
-    // GetNumberOfFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> isize,
-    // GetNextFinalizable: unsafe extern "system" fn(this: *mut IGCHeap) -> ObjectRef,
+    GetNumberOfFinalizable: extern "system" fn(this: *mut IGCHeap) -> isize,
+    GetNextFinalizable: extern "system" fn(this: *mut IGCHeap) -> ObjectRef,
     // BCL rountines
     bcl: [DummyFunc; 16],
     // GetMemoryInfo: unsafe extern "system" fn(this: *mut IGCHeap,
@@ -126,6 +126,15 @@ fn get_gc(this: *mut IGCHeap) -> &'static mut RustGc {
     unsafe { &mut *(*this).gc }
 }
 
+extern "system" fn GCHeap_GetNumberOfFinalizable(_: *mut IGCHeap) -> isize {
+    unimplemented!()
+}
+
+extern "system" fn GCHeap_GetNextFinalizable(this: *mut IGCHeap) -> ObjectRef {
+    let f = get_gc(this).pop_finalizable();
+    f.unwrap_or(null_mut())
+}
+
 extern "system" fn GCHeap_GarbageCollect(this: *mut IGCHeap, generation: i32, _low_memory_p: bool, _mode: i32) -> u32 {
     get_gc(this).do_collect(generation);
     0
@@ -170,10 +179,11 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
 const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
     hosting: [nop; 4],
     concurrent: [nop; 6],
-    finalization: [nop; 2],
+    GetNumberOfFinalizable: GCHeap_GetNumberOfFinalizable,
+    GetNextFinalizable: GCHeap_GetNextFinalizable,
     bcl: [nop; 16],
     GarbageCollect: GCHeap_GarbageCollect,
-    bcl2: [nop; 5],
+    bcl2: [nop_ret_non_null; 5],
     Initialize: GCHeap_Initialize,
     vm1: [nop_ret_non_null; 7],
     vm2: [nop; 8],

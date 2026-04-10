@@ -91,6 +91,7 @@ struct IGCToClrVTable {
     CreateThread: extern "system" fn(this: *const IGCToCLR, thread_start: extern "system" fn(*const c_void), arg: *const c_void, is_suspendable: bool, name: *const c_char),
     diag: [usize; 7],
     StompWriteBarrier: extern "system" fn(this: *const IGCToCLR, args: *const WriteBarrierParameters),
+    EnableFinalization: extern "system" fn(this: *const IGCToCLR, gcHasWorkForFinalizerThread: bool),
 }
 
 pub struct GCToCLR {
@@ -159,5 +160,9 @@ impl GCToCLR {
 
     pub fn stomp_write_barrier(&self, args: &WriteBarrierParameters) {
         (self.vtable().StompWriteBarrier)(self.ptr, args)
+    }
+
+    pub fn enable_finalization(&self, has_finalizable: bool) {
+        (self.vtable().EnableFinalization)(self.ptr, has_finalizable);
     }
 }
