@@ -79,10 +79,11 @@ pub struct IGCHeapVTable {
     // GetTotalBytesInUse: unsafe extern "system" fn(this: *mut IGCHeap) -> isize,
     // GetTotalAllocatedBytes: unsafe extern "system" fn(this: *mut IGCHeap) -> i64,
     GarbageCollect: extern "system" fn(this: *mut IGCHeap, generation: i32, low_memory_p: bool, mode: i32) -> u32,
-    bcl2: [DummyFunc; 5],
+    GetMaxGeneration: DummyFunc,
     // GetMaxGeneration: unsafe extern "system" fn(this: *mut IGCHeap) -> u32,
-    // SetFinalizationRun: unsafe extern "system" fn(this: *mut IGCHeap, obj: ObjectRef),
-    // RegisterForFinalization: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32, obj: ObjectRef) -> bool,
+    SetFinalizationRun: extern "system" fn(this: *mut IGCHeap, obj: ObjectRef),
+    RegisterForFinalization: extern "system" fn(this: *mut IGCHeap, generation: i32, obj: ObjectRef) -> bool,
+    bcl2: [DummyFunc; 2],
     // GetLastGCPercentTimeInGC: unsafe extern "system" fn(this: *mut IGCHeap) -> i32,
     // GetLastGCGenerationSize: unsafe extern "system" fn(this: *mut IGCHeap, generation: i32) -> isize,
     // Miscellaneous routines used by the VM
@@ -140,6 +141,15 @@ extern "system" fn GCHeap_GarbageCollect(this: *mut IGCHeap, generation: i32, _l
     0
 }
 
+extern "system" fn GCHeap_SetFinalizationRun(_: *mut IGCHeap, obj: ObjectRef) {
+    unsafe { &mut *obj }.set_finalizer_run(true);
+}
+
+extern "system" fn GCHeap_RegisterForFinalization(this: *mut IGCHeap, _: i32, obj: ObjectRef) -> bool {
+    get_gc(this).reregister_finalization(obj);
+    true
+}
+
 extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     println!("GCHeap::Initialize");
 
@@ -183,7 +193,10 @@ const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
     GetNextFinalizable: GCHeap_GetNextFinalizable,
     bcl: [nop; 16],
     GarbageCollect: GCHeap_GarbageCollect,
-    bcl2: [nop_ret_non_null; 5],
+    GetMaxGeneration: nop,
+    SetFinalizationRun: GCHeap_SetFinalizationRun,
+    RegisterForFinalization: GCHeap_RegisterForFinalization,
+    bcl2: [nop_ret_non_null; 2],
     Initialize: GCHeap_Initialize,
     vm1: [nop_ret_non_null; 7],
     vm2: [nop; 8],

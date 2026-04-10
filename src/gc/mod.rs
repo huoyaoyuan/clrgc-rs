@@ -214,4 +214,11 @@ impl RustGc {
     pub fn pop_finalizable(&mut self) -> Option<ObjectRef> {
         self.finalization_queue.lock().unwrap().pop_front()
     }
+
+    pub fn reregister_finalization(&mut self, or: ObjectRef) {
+        let r = self.segments.read().unwrap();
+        let Some(seg) = r.iter().find(|seg| seg.contains(or)) else { return };
+        unsafe { &mut *or }.set_finalizer_run(false);
+        seg.get_mut().set_finalization_pending(or, false).unwrap();
+    }
 }
