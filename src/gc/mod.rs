@@ -132,6 +132,17 @@ impl RustGc {
                 });
             }
 
+            // Dependent handle target are treated similar to fields
+            self.handle_manager.for_each_handle_mut(|h| {
+                if h.handle_type == HandleType::Dependent {
+                    if h.object.is_null() || is_object_dead(h.object) {
+                        h.extra_or_secondary = 0;
+                    } else {
+                        try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef);
+                    }
+                }
+            });
+
             while let Some(or) = mark_queue.pop_front() {
                 let obj = unsafe { &mut * or };
                 obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
