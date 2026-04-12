@@ -44,21 +44,9 @@ impl RustGc {
     }
 
     pub fn complete_segment(&mut self, segment_end: usize) {
-        let r = self.segments.write().unwrap();
+        let r = self.segments.read().unwrap();
         let Some(segment) = r.iter().find(|s| { s.data().as_ptr_range().end as usize == segment_end }) else { return };
         segment.get_mut().set_alloc_completed();
-    }
-
-    pub fn try_find_interior(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
-        let r = self.segments.read().unwrap();
-        let segment = r.iter().find(|s| { s.contains(or_maybe) })?;
-        segment.find_object(or_maybe)
-    }
-
-    fn mark_object(&self, or: ObjectRef) -> Result<bool, ()> {
-        let r = self.segments.read().unwrap();
-        let segment = r.iter().find(|s| { s.contains(or) } ).ok_or(())?;
-        segment.get_mut().mark_object(or)
     }
 
     pub fn do_collect(&mut self, generation: i32) {
@@ -69,9 +57,20 @@ impl RustGc {
 
         self.clr.gc_start_work(generation, 2);
 
+        let r = self.segments.read().unwrap();
+        let find_segment = |or: ObjectRef| r.iter().find(|s| s.contains(or));
+
+        let mark_object = |or: ObjectRef| {
+            let segment = find_segment(or).ok_or(())?;
+            segment.get_mut().mark_object(or)
+        };
+
+        let is_object_dead = |or: ObjectRef|
+            !or.is_null() && find_segment(or).is_some_and(|seg| !seg.is_marked(or).unwrap());
+
         let mut mark_queue : VecDeque<ObjectRef> = VecDeque::new();
         let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef| {
-            if self.mark_object(or).unwrap_or(false) {
+            if mark_object(or).unwrap_or(false) {
                 mark_queue.push_back(or);
             }
         };
@@ -83,7 +82,7 @@ impl RustGc {
                     if (*pp_obj).is_null() {
                         None
                     } else if f.contains(ScanFlags::MayBeInterior) {
-                        self.try_find_interior(*pp_obj)
+                        find_segment(*pp_obj).and_then(|s| s.find_object(*pp_obj))
                     } else {
                         Some(*pp_obj)
                     };
@@ -96,10 +95,10 @@ impl RustGc {
         println!("Encountered {} roots from stack.", mark_queue.len());
         self.handle_manager.for_each_handle(|h| {
             if !h.object.is_null() {
-                try_mark_push(&mut mark_queue, h.object);
-            }
-            if h.handle_type == HandleType::Dependent && h.extra_or_secondary != 0 {
-                try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef);
+                match h.handle_type {
+                    HandleType::Strong | HandleType::Pinned => try_mark_push(&mut mark_queue, h.object),
+                    _ => {},
+                }
             }
         });
         println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
@@ -111,11 +110,16 @@ impl RustGc {
                 obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
         }
 
+        self.handle_manager.for_each_handle_mut(|h| {
+            if h.handle_type == HandleType::Short && is_object_dead(h.object) {
+                h.object = std::ptr::null_mut();
+            }
+        });
+
         let has_finalizable;
 
         // Mark finalizables
         {
-            let r = self.segments.read().unwrap();
             let mut finalizables: VecDeque<ObjectRef> = VecDeque::new();
             for seg in r.iter() {
                 seg.get_mut().for_each_obj_mut(&mut |seg, or| {
@@ -138,6 +142,14 @@ impl RustGc {
             q.append(&mut finalizables);
             has_finalizable = !q.is_empty();
         }
+
+        self.handle_manager.for_each_handle_mut(|h| {
+            if h.handle_type == HandleType::ShortRecurrsion && is_object_dead(h.object) {
+                h.object = std::ptr::null_mut();
+            }
+        });
+
+        drop(r);
 
         let mut heap_count = 0;
         let mut heap_bytes = 0;
