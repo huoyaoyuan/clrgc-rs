@@ -5,6 +5,7 @@ use crate::gcinterface::{GcDescVars, IGCHandleManager, IGCHeap, IGCToCLR};
 mod gc;
 mod gcinterface;
 mod objects;
+mod utils;
 
 unsafe fn heap_alloc<T>(value: T) -> *mut T {
     let b = Box::new(value);

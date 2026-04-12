@@ -1,6 +1,6 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use crate::objects::{ObjectHandle, ObjectRef, HandleType};
+use crate::objects::{GcHandle, HandleType, ObjectHandle, ObjectRef};
 use crate::gc::RustGc;
 
 #[repr(C)]
@@ -28,23 +28,30 @@ extern "system" fn GCHandleStore_Nop(_: *mut IGCHandleStore) {
 }
 
 extern "system" fn GCHandleStore_ContainsHandle(this: *mut IGCHandleStore, handle: ObjectHandle) -> bool {
-    get_gc_store(this).handle_manager.contains_handle(handle)
+    get_gc_store(this).handle_table.read().unwrap().contains(handle)
+}
+
+fn create_handle(gc: &mut RustGc, object: ObjectRef, extra_or_secondary: usize, handle_type: HandleType) -> ObjectHandle {
+    let mut lock = gc.handle_table.write().unwrap();
+    let new = lock.create_new();
+    unsafe { *new = GcHandle { object, extra_or_secondary, handle_type } };
+    new
 }
 
 extern "system" fn GCHandleStore_CreateHandleOfType(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType) -> ObjectHandle {
-    get_gc_store(this).handle_manager.create_handle(obj, 0, t)
+    create_handle(get_gc_store(this), obj, 0, t)
 }
 
 extern "system" fn GCHandleStore_CreateHandleOfType2(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, _: i32) -> ObjectHandle {
-    get_gc_store(this).handle_manager.create_handle(obj, 0, t)
+    create_handle(get_gc_store(this), obj, 0, t)
 }
 
 extern "system" fn GCHandleStore_CreateHandleWithExtraInfo(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, extra_info: usize) -> ObjectHandle {
-    get_gc_store(this).handle_manager.create_handle(obj, extra_info, t)
+    create_handle(get_gc_store(this), obj, extra_info, t)
 }
 
 extern "system" fn GCHandleStore_CreateDependentHandle(this: *mut IGCHandleStore, primary: ObjectRef, secondary: ObjectRef) -> ObjectHandle {
-    get_gc_store(this).handle_manager.create_handle(primary, secondary as usize, HandleType::Dependent)
+    create_handle(get_gc_store(this), primary, secondary as usize, HandleType::Dependent)
 }
 
 const GCHandleStore_vtable : IGCHandleStoreVTable = IGCHandleStoreVTable {
@@ -113,19 +120,22 @@ extern "system" fn GCHandleManager_DestroyHandleStore(_: *mut IGCHandleManager, 
 }
 
 extern "system" fn GCHandleManager_CreateGlobalHandleOfType(this: *mut IGCHandleManager, obj: ObjectRef, t: HandleType) -> ObjectHandle {
-    get_gc(this).handle_manager.create_handle(obj, 0, t)
+    create_handle(get_gc(this), obj, 0, t)
 }
 
 extern "system" fn GCHandleManager_CreateDuplicateHandle(this: *mut IGCHandleManager, handle: ObjectHandle) -> ObjectHandle {
-    get_gc(this).handle_manager.duplicate_handle(handle)
+    let mut lock = get_gc(this).handle_table.write().unwrap();
+    let new = lock.create_new();
+    unsafe { *new = *handle };
+    new
 }
 
 extern "system" fn GCHandleManager_DestroyHandleOfType(this: *mut IGCHandleManager, handle: ObjectHandle, _: HandleType) {
-    get_gc(this).handle_manager.destroy_handle(handle)
+    _ = get_gc(this).handle_table.write().unwrap().remove(handle);
 }
 
 extern "system" fn GCHandleManager_DestroyHandleOfUnknownType(this: *mut IGCHandleManager, handle: ObjectHandle) {
-    get_gc(this).handle_manager.destroy_handle(handle)
+    _ = get_gc(this).handle_table.write().unwrap().remove(handle);
 }
 
 extern "system" fn GCHandleManager_SetExtraOrSecondary(_: *mut IGCHandleManager, handle: ObjectHandle, extra_info: usize) {

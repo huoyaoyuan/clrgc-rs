@@ -1,6 +1,7 @@
 use bitvec::{BitArr, order::Lsb0};
 
 use crate::objects::{Object, ObjectRef};
+use crate::utils::IndexOfPtr;
 
 pub struct Segment {
     data: [usize; Self::FLAGS_SIZE],
@@ -34,13 +35,7 @@ impl Segment {
     }
 
     fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
-        let range = self.data.as_ptr_range();
-        let bptr = or as *const usize;
-        if range.contains(&bptr) {
-            unsafe { Ok(bptr.offset_from(range.start) as usize) }
-        } else {
-            Err(())
-        }
+        self.data.index_of(or as *mut usize).ok_or(())
     }
 }
 

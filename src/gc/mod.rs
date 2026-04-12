@@ -3,19 +3,19 @@ use std::ops::Range;
 use std::sync::{Mutex, RwLock};
 use std::vec;
 
-pub use handle_manager::HandleManager;
 pub use segment::{Seg, Segment, LargeSegment};
 use unsafe_ref::UnsafeRef;
+use handle_table::HandleTable;
 use crate::gcinterface::{GCToCLR, IGCToCLR, ScanFlags, SuspendReason};
 use crate::objects::{HandleType, ObjectRef};
 
-mod handle_manager;
+mod handle_table;
 mod segment;
 mod unsafe_ref;
 
 pub struct RustGc {
     pub clr: GCToCLR,
-    pub handle_manager: HandleManager,
+    pub handle_table: RwLock<HandleTable>,
     segments: RwLock<Vec<UnsafeRef<dyn Seg>>>,
     finalization_queue: Mutex<VecDeque<ObjectRef>>,
 }
@@ -24,7 +24,7 @@ impl RustGc {
     pub fn new(clr: *const IGCToCLR) -> RustGc {
         RustGc {
             clr: GCToCLR::new(clr),
-            handle_manager: HandleManager::new(),
+            handle_table: RwLock::new(HandleTable::new()),
             segments: RwLock::new(vec![]),
             finalization_queue: Mutex::new(VecDeque::new()),
         }
@@ -75,6 +75,8 @@ impl RustGc {
             }
         };
 
+        let mut handle_table_lock = self.handle_table.write().unwrap();
+
         // Start mark phase
         self.clr.scan_roots(generation, 2, true, false, false,
             |pp_obj, _sc, f| {
@@ -93,15 +95,15 @@ impl RustGc {
             });
         let stack_roots = mark_queue.len();
         println!("Encountered {} roots from stack.", mark_queue.len());
-        self.handle_manager.for_each_handle(|h| {
-            if !h.object.is_null() {
-                match h.handle_type {
-                    HandleType::Strong | HandleType::Pinned => try_mark_push(&mut mark_queue, h.object),
-                    _ => {},
-                }
+
+        for h in handle_table_lock.iter().filter(|h| !h.object.is_null()) {
+            match h.handle_type {
+                HandleType::Strong | HandleType::Pinned => try_mark_push(&mut mark_queue, h.object),
+                _ => {},
             }
-        });
+        }
         println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
+
         self.finalization_queue.lock().unwrap().iter()
             .for_each(|f| try_mark_push(&mut mark_queue, *f));
 
@@ -110,11 +112,11 @@ impl RustGc {
                 obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
         }
 
-        self.handle_manager.for_each_handle_mut(|h| {
+        for h in handle_table_lock.iter_mut() {
             if h.handle_type == HandleType::Short && is_object_dead(h.object) {
                 h.object = std::ptr::null_mut();
             }
-        });
+        }
 
         let has_finalizable;
 
@@ -133,15 +135,13 @@ impl RustGc {
             }
 
             // Dependent handle target are treated similar to fields
-            self.handle_manager.for_each_handle_mut(|h| {
-                if h.handle_type == HandleType::Dependent {
-                    if h.object.is_null() || is_object_dead(h.object) {
-                        h.extra_or_secondary = 0;
-                    } else {
-                        try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef);
-                    }
+            for h in handle_table_lock.iter_mut().filter(|h| h.handle_type == HandleType::Dependent) {
+                if h.object.is_null() || is_object_dead(h.object) {
+                    h.extra_or_secondary = 0;
+                } else {
+                    try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef);
                 }
-            });
+            };
 
             while let Some(or) = mark_queue.pop_front() {
                 let obj = unsafe { &mut * or };
@@ -154,11 +154,11 @@ impl RustGc {
             has_finalizable = !q.is_empty();
         }
 
-        self.handle_manager.for_each_handle_mut(|h| {
+        for h in handle_table_lock.iter_mut() {
             if h.handle_type == HandleType::ShortRecurrsion && is_object_dead(h.object) {
                 h.object = std::ptr::null_mut();
             }
-        });
+        }
 
         drop(r);
 
