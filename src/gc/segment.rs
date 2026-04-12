@@ -12,10 +12,9 @@ pub struct Segment {
 
 pub trait Seg {
     fn data(&self) -> &[usize];
-    fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef));
-    fn for_each_obj_mut(&mut self, callback: &mut dyn FnMut(&mut dyn Seg, ObjectRef));
+    fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static>;
     fn contains(&self, or: ObjectRef) -> bool;
-    fn find_object(&self, or: ObjectRef) -> Option<ObjectRef>;
+    fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef>;
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()>;
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
     fn clear_mark(&mut self);
@@ -37,6 +36,10 @@ impl Segment {
     fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
         self.data.index_of(or as *mut usize).ok_or(())
     }
+
+    fn iter_raw(&self) -> impl Iterator<Item = ObjectRef> + 'static {
+        RawSegmentIter { range: self.data.as_ptr_range(), next: &raw const self.data[1] }
+    }
 }
 
 impl Seg for Segment {
@@ -44,57 +47,16 @@ impl Seg for Segment {
         &self.data
     }
 
-    fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef)) {
-        let range = self.data.as_ptr_range();
-        let mut ptr = &raw const self.data[1];
-        while range.contains(&ptr) {
-            let obj = unsafe { &*(ptr as ObjectRef) };
-            if obj.method_table.is_null() {
-                return;
-            }
-            if obj.method_table != &Object::EMPTY {
-                callback(ptr as ObjectRef);
-            }
-            ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
-        }
-    }
-
-    fn for_each_obj_mut(&mut self, callback: &mut dyn FnMut(&mut dyn Seg, ObjectRef)) {
-        let range = self.data.as_ptr_range();
-        let mut ptr = &raw const self.data[1];
-        while range.contains(&ptr) {
-            let obj = unsafe { &*(ptr as ObjectRef) };
-            if obj.method_table.is_null() {
-                return;
-            }
-            if obj.method_table != &Object::EMPTY {
-                callback(self, ptr as ObjectRef);
-            }
-            ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
-        }
+    fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static> {
+        Box::new(self.iter_raw().filter(|or| unsafe { (**or).method_table != &Object::EMPTY }))
     }
 
     fn contains(&self, or: ObjectRef) -> bool {
         self.data.as_ptr_range().contains(&(or as *const usize))
     }
 
-    fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
-        let range = self.data.as_ptr_range();
-        let bptr = or as *const usize;
-        let mut ptr = &raw const self.data[1];
-        while range.contains(&ptr) {
-            let obj = unsafe { &*(ptr as ObjectRef) };
-            if obj.method_table.is_null() {
-                return None;
-            }
-            let next_ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
-            if ptr <= bptr && next_ptr > bptr {
-                return Some(ptr as ObjectRef);
-            }
-            ptr = next_ptr;
-        }
-
-        None
+    fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
+        self.iter_raw().find(|o| unsafe { (**o).method_table != &Object::EMPTY && or_maybe.byte_offset_from_unsigned(*o) < (**o).total_size_aligned() })
     }
 
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
@@ -124,9 +86,6 @@ impl Seg for Segment {
 
     fn sweep(&mut self) -> bool {
         let mut alive = false;
-
-        let range = self.data.as_ptr_range();
-        let mut ptr = &raw const self.data[1];
         let mut empty_from: Option<ObjectRef> = None;
 
         fn mark_as_empty(from: ObjectRef, to: ObjectRef) {
@@ -138,13 +97,7 @@ impl Seg for Segment {
             }
         }
 
-        while range.contains(&ptr) {
-            let or = ptr as ObjectRef;
-            let obj = unsafe { &mut *or };
-            if obj.method_table.is_null() {
-                break;
-            }
-
+        for or in self.iter_raw() {
             if self.is_marked(or).unwrap() {
                 alive = true;
                 if let Some(last) = empty_from {
@@ -154,12 +107,10 @@ impl Seg for Segment {
             } else {
                 empty_from = empty_from.or(Some(or));
             }
-
-            ptr = ptr.wrapping_byte_add(obj.total_size_aligned());
         }
-        
+
         if let Some(last) = empty_from {
-            mark_as_empty(last, ptr as ObjectRef);
+            unsafe { (*last).method_table = std::ptr::null() };
         }
 
         alive
@@ -174,9 +125,32 @@ impl Seg for Segment {
     }
 }
 
+struct RawSegmentIter {
+    next: *const usize,
+    range: std::ops::Range<*const usize>,
+}
+
+impl Iterator for RawSegmentIter {
+    type Item = ObjectRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.range.contains(&self.next) {
+            return None;
+        }
+
+        let obj = unsafe { &*(self.next as ObjectRef) };
+        if obj.method_table.is_null() {
+            return None;
+        }
+
+        let prev = self.next as ObjectRef;
+        self.next = self.next.wrapping_byte_add(obj.total_size_aligned());
+        return Some(prev);
+    }
+}
+
 pub struct LargeSegment {
     data: Box<[usize]>,
-    alive: bool,
     mark: bool,
     finalization_pending: bool
 }
@@ -186,7 +160,6 @@ impl LargeSegment {
         assert!(size % size_of::<usize>() == 0);
         Self {
             data: Box::from_iter(vec![0; size / size_of::<usize>()]),
-            alive: true,
             mark: false,
             finalization_pending: false
         }
@@ -202,26 +175,16 @@ impl Seg for LargeSegment {
         self.data.as_ref()
     }
 
-    fn for_each_obj(&self, callback: &mut dyn FnMut(ObjectRef)) {
-        if self.alive {
-            let or = self.as_object_ref();
-            callback(or);
-        }
-    }
-
-    fn for_each_obj_mut(&mut self, callback: &mut dyn FnMut(&mut dyn Seg, ObjectRef)) {
-        if self.alive {
-            let or = self.as_object_ref();
-            callback(self, or);
-        }
+    fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static> {
+        Box::new(std::iter::once(self.as_object_ref()))
     }
 
     fn contains(&self, or: ObjectRef) -> bool {
         self.data.as_ptr_range().contains(&(or as *const usize))
     }
 
-    fn find_object(&self, or: ObjectRef) -> Option<ObjectRef> {
-        if self.contains(or) { Some(self.as_object_ref()) } else { None }
+    fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
+        if self.contains(or_maybe) { Some(self.as_object_ref()) } else { None }
     }
 
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
@@ -263,10 +226,7 @@ impl Seg for LargeSegment {
         }
     }
 
-    fn sweep(&mut self) -> bool {
-        self.alive = unsafe { self.mark || (*self.as_object_ref()).needs_finalization() };
-        self.alive
-    }
+    fn sweep(&mut self) -> bool { !self.mark }
     
     fn set_alloc_completed(&mut self) { }
     

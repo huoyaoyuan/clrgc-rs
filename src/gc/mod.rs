@@ -124,14 +124,14 @@ impl RustGc {
         {
             let mut finalizables: VecDeque<ObjectRef> = VecDeque::new();
             for seg in r.iter() {
-                seg.get_mut().for_each_obj_mut(&mut |seg, or| {
+                for or in seg.iter() {
                     let obj = unsafe { &mut *or };
                     if !seg.is_marked(or).unwrap() && obj.needs_finalization() && !seg.get_finalization_pending(or).unwrap() {
                         finalizables.push_back(or);
-                        seg.set_finalization_pending(or, true).unwrap();
+                        seg.get_mut().set_finalization_pending(or, true).unwrap();
                         try_mark_push(&mut mark_queue, or);
                     }
-                });
+                };
             }
 
             // Dependent handle target are treated similar to fields
@@ -170,7 +170,7 @@ impl RustGc {
         {
             let r = self.segments.read().unwrap();
             for seg in r.iter() {
-                seg.for_each_obj(&mut |or| {
+                for or in seg.iter() {
                     unsafe {
                         // println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
                         // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
@@ -186,7 +186,7 @@ impl RustGc {
                             }
                         });
                     }
-                });
+                };
             }
         }
         println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}.", heap_count, heap_bytes, marked_count);
@@ -213,20 +213,12 @@ impl RustGc {
             println!("Segments ineligible for compact: {}", incomplete);
         }
         
-        let mut heap_count = 0;
-        let mut heap_bytes = 0;
         {
             let r = self.segments.read().unwrap();
-            for seg in r.iter() {
-                seg.for_each_obj(&mut |or| {
-                    unsafe {
-                        heap_count += 1;
-                        heap_bytes += (*or).total_size();
-                    }
-                });
-            }
+            let heap_count = r.iter().flat_map(|s| s.iter()).count();
+            let heap_bytes = r.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
+            println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
         }
-        println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
 
         println!("Resuming EE");
         self.clr.gc_done(generation);
