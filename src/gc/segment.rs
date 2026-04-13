@@ -6,6 +6,7 @@ use crate::utils::IndexOfPtr;
 pub struct Segment {
     data: [usize; Self::FLAGS_SIZE],
     mark: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
+    pin: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
     finalization_pending: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
     alloc_completed: bool,
 }
@@ -15,9 +16,10 @@ pub trait Seg {
     fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static>;
     fn contains(&self, or: ObjectRef) -> bool;
     fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef>;
-    fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()>;
+    fn mark_object(&mut self, or: ObjectRef, pin: bool) -> Result<bool, ()>;
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
-    fn clear_mark(&mut self);
+    fn is_pinned(&self, or: ObjectRef) -> Result<bool, ()>;
+    fn clear_flags(&mut self);
     fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()>;
     fn get_finalization_pending(&self, or: ObjectRef) -> Result<bool, ()>;
     fn sweep(&mut self) -> bool;
@@ -59,8 +61,11 @@ impl Seg for Segment {
         self.iter_raw().find(|o| unsafe { (**o).method_table != &Object::EMPTY && or_maybe.byte_offset_from_unsigned(*o) < (**o).total_size_aligned() })
     }
 
-    fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
+    fn mark_object(&mut self, or: ObjectRef, pin: bool) -> Result<bool, ()> {
         let index = self.get_index(or)?;
+        if pin {
+            self.pin.set(index, true);
+        }
         Ok(!self.mark.replace(index, true))
     }
 
@@ -69,8 +74,14 @@ impl Seg for Segment {
         Ok(self.mark[index])
     }
 
-    fn clear_mark(&mut self) {
+    fn is_pinned(&self, or: ObjectRef) -> Result<bool, ()> {
+        let index = self.get_index(or)?;
+        Ok(self.pin[index])
+    }
+
+    fn clear_flags(&mut self) {
         self.mark.fill(false);
+        self.pin.fill(false);
     }
 
     fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()> {
@@ -187,7 +198,7 @@ impl Seg for LargeSegment {
         self.contains(or_maybe).then(|| self.as_object_ref())
     }
 
-    fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
+    fn mark_object(&mut self, or: ObjectRef, _: bool) -> Result<bool, ()> {
         if or == self.as_object_ref() {
             let old = self.mark;
             self.mark = true;
@@ -205,7 +216,15 @@ impl Seg for LargeSegment {
         }
     }
 
-    fn clear_mark(&mut self) {
+    fn is_pinned(&self, or: ObjectRef) -> Result<bool, ()> {
+        if or == self.as_object_ref() {
+            Ok(true)
+        } else {
+            Err(())
+        }
+    }
+
+    fn clear_flags(&mut self) {
         self.mark = false;
     }
 

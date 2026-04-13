@@ -61,17 +61,17 @@ impl RustGc {
         let r = self.segments.read().unwrap();
         let find_segment = |or: ObjectRef| r.iter().find(|s| s.contains(or));
 
-        let mark_object = |or: ObjectRef| {
+        let mark_object = |or: ObjectRef, pin: bool| {
             let segment = find_segment(or).ok_or(())?;
-            segment.get_mut().mark_object(or)
+            segment.get_mut().mark_object(or, pin)
         };
 
         let is_object_dead = |or: ObjectRef|
             !or.is_null() && find_segment(or).is_some_and(|seg| !seg.is_marked(or).unwrap());
 
         let mut mark_queue: VecDeque<ObjectRef> = VecDeque::new();
-        let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef| {
-            if mark_object(or).unwrap_or(false) {
+        let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef, pin: bool| {
+            if mark_object(or, pin).unwrap_or(false) {
                 mark_queue.push_back(or);
             }
         };
@@ -91,7 +91,7 @@ impl RustGc {
                     };
 
                 if let Some(obj) = or {
-                    try_mark_push(&mut mark_queue, obj);
+                    try_mark_push(&mut mark_queue, obj, f.contains(ScanFlags::Pinned));
                 }
             });
         let stack_roots = mark_queue.len();
@@ -99,19 +99,20 @@ impl RustGc {
 
         for h in handle_table_lock.iter().filter(|h| !h.object.is_null()) {
             match h.handle_type {
-                HandleType::Strong | HandleType::Pinned => try_mark_push(&mut mark_queue, h.object),
+                HandleType::Strong => try_mark_push(&mut mark_queue, h.object, false),
+                HandleType::Pinned => try_mark_push(&mut mark_queue, h.object, true),
                 _ => {}
             }
         }
         println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
 
         for f in self.finalization_queue.lock().unwrap().iter() {
-            try_mark_push(&mut mark_queue, *f);
+            try_mark_push(&mut mark_queue, *f, false);
         }
 
         while let Some(or) = mark_queue.pop_front() {
             let obj = unsafe { &mut *or };
-            obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
+            obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
         }
 
         for h in handle_table_lock.iter_mut() {
@@ -131,7 +132,7 @@ impl RustGc {
                     if !seg.is_marked(or).unwrap() && obj.needs_finalization() && !seg.get_finalization_pending(or).unwrap() {
                         finalizables.push_back(or);
                         seg.get_mut().set_finalization_pending(or, true).unwrap();
-                        try_mark_push(&mut mark_queue, or);
+                        try_mark_push(&mut mark_queue, or, false);
                     }
                 }
             }
@@ -141,13 +142,13 @@ impl RustGc {
                 if h.object.is_null() || is_object_dead(h.object) {
                     h.extra_or_secondary = 0;
                 } else {
-                    try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef);
+                    try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
                 }
             }
 
             while let Some(or) = mark_queue.pop_front() {
                 let obj = unsafe { &mut *or };
-                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r));
+                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
             }
 
             let mut q = self.finalization_queue.lock().unwrap();
@@ -167,6 +168,7 @@ impl RustGc {
         let mut heap_count = 0;
         let mut heap_bytes = 0;
         let mut marked_count = 0;
+        let mut pinned_count = 0;
         let mut field_count = 0;
         let mut non_null_field_count = 0;
         {
@@ -179,6 +181,7 @@ impl RustGc {
                         heap_count += 1;
                         heap_bytes += (*or).total_size();
                         if seg.is_marked(or).unwrap_or(false) { marked_count += 1; }
+                        if seg.is_pinned(or).unwrap_or(false) { pinned_count += 1; }
 
                         (*or).for_each_obj_ref(|field| {
                             field_count += 1;
@@ -191,7 +194,7 @@ impl RustGc {
                 }
             }
         }
-        println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}.", heap_count, heap_bytes, marked_count);
+        println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}. Pinned: {}.", heap_count, heap_bytes, marked_count, pinned_count);
         println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
 
         // Start sweep phase
@@ -205,7 +208,7 @@ impl RustGc {
                     incomplete += 1;
                 }
                 if seg.sweep() {
-                    seg.clear_mark();
+                    seg.clear_flags();
                     i += 1;
                 } else {
                     println!("Removing empty segment at {:016x}", seg.data().as_ptr() as usize);
