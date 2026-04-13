@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_void};
 use bitflags::bitflags;
 
-use super::gc_heap::gc_alloc_context;
+use super::gc_alloc_context;
 use crate::objects::ObjectRef;
 
 #[repr(C)]
@@ -118,14 +118,16 @@ impl GCToCLR {
         (self.vtable().RestartEE)(self.ptr, finished_gc)
     }
 
-    pub fn scan_roots<F>(&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) where F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags) {
+    pub fn scan_roots<F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags)>
+        (&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) {
         (self.vtable().BeforeGcScanRoots)(self.ptr, generation, is_bgc, is_concurrent);
 
         let mut sc = ScanContext::default();
         sc.promotion = promotion;
         sc._unused1 = &raw mut callback as usize;
 
-        extern "system" fn scan_callback<F>(ppObject: *mut ObjectRef, sc: *const ScanContext, flags: ScanFlags) where F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags) {
+        extern "system" fn scan_callback<F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags)>
+            (ppObject: *mut ObjectRef, sc: *const ScanContext, flags: ScanFlags) {
             unsafe {
                 let action = (*sc)._unused1 as *mut F;
                 (*action)(&mut *ppObject, &*sc, flags);
@@ -148,8 +150,8 @@ impl GCToCLR {
         unsafe { &*(self.vtable().GetAllocContext)(self.ptr) }
     }
 
-    pub fn for_each_alloc_context<F>(&self, mut action: F) where F: FnMut(&gc_alloc_context) {
-        extern "system" fn callback<F>(alloc_context: *const gc_alloc_context, param: usize) where F: FnMut(&gc_alloc_context) {
+    pub fn for_each_alloc_context<F: FnMut(&gc_alloc_context)>(&self, mut action: F) {
+        extern "system" fn callback<F: FnMut(&gc_alloc_context)>(alloc_context: *const gc_alloc_context, param: usize) {
             unsafe {
                 let action = param as *mut F;
                 (*action)(&*alloc_context);

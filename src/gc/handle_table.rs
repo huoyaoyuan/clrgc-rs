@@ -1,6 +1,6 @@
 use bitvec::{BitArr, order::Lsb0};
 
-use crate::objects::{GcHandle, ObjectHandle};
+use crate::objects::*;
 use crate::utils::IndexOfPtr;
 
 pub struct HandleTable {
@@ -19,7 +19,7 @@ impl HandleTable {
     pub fn new() -> Self {
         Self { segments: vec![] }
     }
-    
+
     pub fn iter(&self) -> impl Iterator<Item = &GcHandle> {
         self.segments.iter().flat_map(|s|
             s.handles.iter().enumerate().filter_map(|(idx, h)| (s.used_map[idx] as bool).then_some(h)))

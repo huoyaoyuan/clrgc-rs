@@ -1,6 +1,7 @@
 use std::ptr::null_mut;
+
+use super::*;
 use crate::gc::RustGc;
-use crate::gcinterface::gc_to_clr::{WriteBarrierOp, WriteBarrierParameters};
 use crate::objects::ObjectRef;
 
 #[repr(C)]
@@ -11,7 +12,7 @@ pub struct gc_alloc_context {
     alloc_bytes_uoh: i64,
     gc_reserved_1: usize,
     gc_reserved_2: usize,
-    alloc_count: i32
+    alloc_count: i32,
 }
 
 #[repr(C)]
@@ -186,7 +187,7 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
     }
 }
 
-const GCHeap_vtable : IGCHeapVTable = IGCHeapVTable {
+const GCHeap_vtable: IGCHeapVTable = IGCHeapVTable {
     hosting: [nop; 4],
     concurrent: [nop; 6],
     GetNumberOfFinalizable: GCHeap_GetNumberOfFinalizable,

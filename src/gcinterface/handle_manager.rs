@@ -1,6 +1,7 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use crate::objects::{GcHandle, HandleType, ObjectHandle, ObjectRef};
+
+use crate::objects::*;
 use crate::gc::RustGc;
 
 #[repr(C)]
@@ -11,13 +12,13 @@ pub struct IGCHandleStore {
 
 #[repr(C)]
 pub struct IGCHandleStoreVTable {
-    Uproot: extern "system" fn (this: *mut IGCHandleStore),
-    ContainsHandle: extern "system" fn (this: *mut IGCHandleStore, handle: ObjectHandle) -> bool,
-    CreateHandleOfType: extern "system" fn (this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType) -> ObjectHandle,
-    CreateHandleOfType2: extern "system" fn (this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, heapToAffinitizeTo: i32) -> ObjectHandle,
-    CreateHandleWithExtraInfo: extern "system" fn (this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, extra_info: usize) -> ObjectHandle,
-    CreateDependentHandle: extern "system" fn (this: *mut IGCHandleStore, primary: ObjectRef, secondary: ObjectRef) -> ObjectHandle,
-    Destruct: extern "system" fn (this: *mut IGCHandleStore),
+    Uproot: extern "system" fn(this: *mut IGCHandleStore),
+    ContainsHandle: extern "system" fn(this: *mut IGCHandleStore, handle: ObjectHandle) -> bool,
+    CreateHandleOfType: extern "system" fn(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType) -> ObjectHandle,
+    CreateHandleOfType2: extern "system" fn(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, heapToAffinitizeTo: i32) -> ObjectHandle,
+    CreateHandleWithExtraInfo: extern "system" fn(this: *mut IGCHandleStore, obj: ObjectRef, t: HandleType, extra_info: usize) -> ObjectHandle,
+    CreateDependentHandle: extern "system" fn(this: *mut IGCHandleStore, primary: ObjectRef, secondary: ObjectRef) -> ObjectHandle,
+    Destruct: extern "system" fn(this: *mut IGCHandleStore),
 }
 
 fn get_gc_store(this: *mut IGCHandleStore) -> &'static mut RustGc {
@@ -73,23 +74,23 @@ pub struct IGCHandleManager {
 
 #[repr(C)]
 pub struct IGCHandleManagerVTable {
-    Initialize: extern "system" fn (this: *mut IGCHandleManager) -> bool,
-    Shutdown: extern "system" fn (this: *mut IGCHandleManager),
-    GetGlobalHandleStore: extern "system" fn (this: *mut IGCHandleManager) -> *const IGCHandleStore,
-    CreateHandleStore: extern "system" fn (this: *mut IGCHandleManager) -> *const IGCHandleStore,
-    DestroyHandleStore: extern "system" fn (this: *mut IGCHandleManager, *mut IGCHandleStore),
-    CreateGlobalHandleOfType: extern "system" fn (this: *mut IGCHandleManager, obj: ObjectRef, t: HandleType) -> ObjectHandle,
-    CreateDuplicateHandle: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle) -> ObjectHandle,
-    DestroyHandleOfType: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle, t: HandleType),
-    DestroyHandleOfUnknownType: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle),
-    SetExtraInfoForHandle: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle, extra_info: usize),
-    GetExtraInfoFromHandle: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle) -> usize,
-    StoreObjectInHandle: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle, object: ObjectRef),
-    StoreObjectInHandleIfNull: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle, object: ObjectRef),
-    SetDependentHandleSecondary: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle, object: usize),
-    GetDependentHandleSecondary: extern "system" fn (this: *mut IGCHandleManager, object: ObjectHandle) -> usize,
-    InterlockedCompareExchangeObjectInHandle: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle, object: ObjectRef, comparand: ObjectRef) -> ObjectRef,
-    HandleFetchType: extern "system" fn (this: *mut IGCHandleManager, handle: ObjectHandle) -> HandleType,
+    Initialize: extern "system" fn(this: *mut IGCHandleManager) -> bool,
+    Shutdown: extern "system" fn(this: *mut IGCHandleManager),
+    GetGlobalHandleStore: extern "system" fn(this: *mut IGCHandleManager) -> *const IGCHandleStore,
+    CreateHandleStore: extern "system" fn(this: *mut IGCHandleManager) -> *const IGCHandleStore,
+    DestroyHandleStore: extern "system" fn(this: *mut IGCHandleManager, *mut IGCHandleStore),
+    CreateGlobalHandleOfType: extern "system" fn(this: *mut IGCHandleManager, obj: ObjectRef, t: HandleType) -> ObjectHandle,
+    CreateDuplicateHandle: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle) -> ObjectHandle,
+    DestroyHandleOfType: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle, t: HandleType),
+    DestroyHandleOfUnknownType: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle),
+    SetExtraInfoForHandle: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle, extra_info: usize),
+    GetExtraInfoFromHandle: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle) -> usize,
+    StoreObjectInHandle: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle, object: ObjectRef),
+    StoreObjectInHandleIfNull: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle, object: ObjectRef),
+    SetDependentHandleSecondary: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle, object: usize),
+    GetDependentHandleSecondary: extern "system" fn(this: *mut IGCHandleManager, object: ObjectHandle) -> usize,
+    InterlockedCompareExchangeObjectInHandle: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle, object: ObjectRef, comparand: ObjectRef) -> ObjectRef,
+    HandleFetchType: extern "system" fn(this: *mut IGCHandleManager, handle: ObjectHandle) -> HandleType,
     TraceRefCountedHandles: usize,
 }
 
@@ -168,7 +169,7 @@ extern "system" fn GCHandleManager_HandleFetchType(_: *mut IGCHandleManager, han
     unsafe { (*handle).handle_type }
 }
 
-const GCHandleManager_vtable : IGCHandleManagerVTable = IGCHandleManagerVTable {
+const GCHandleManager_vtable: IGCHandleManagerVTable = IGCHandleManagerVTable {
     Initialize: GCHandleManager_Initialize,
     Shutdown: GCHandleManager_Nop,
     GetGlobalHandleStore: GCHandleManager_GetGlobalHandleStore,
@@ -190,8 +191,8 @@ const GCHandleManager_vtable : IGCHandleManagerVTable = IGCHandleManagerVTable {
 };
 
 impl IGCHandleManager {
-    pub fn new(gc: *mut RustGc) -> IGCHandleManager {
-        IGCHandleManager {
+    pub fn new(gc: *mut RustGc) -> Self {
+        Self {
             vptr: &GCHandleManager_vtable,
             handle_store: IGCHandleStore { vptr: &GCHandleStore_vtable, gc },
             gc,

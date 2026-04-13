@@ -1,11 +1,12 @@
-use std::ffi::c_char;
-use crate::gc::RustGc;
-use crate::gcinterface::{GcDescVars, IGCHandleManager, IGCHeap, IGCToCLR};
-
 mod gc;
 mod gcinterface;
 mod objects;
 mod utils;
+
+use std::ffi::c_char;
+
+use crate::gc::RustGc;
+use crate::gcinterface::*;
 
 unsafe fn heap_alloc<T>(value: T) -> *mut T {
     let b = Box::new(value);
@@ -18,7 +19,8 @@ pub extern "C" fn GC_Initialize(
     clrToGC: *const IGCToCLR,
     gcHeap: *mut *const IGCHeap,
     gcHandleManager: *mut *const IGCHandleManager,
-    _gcDescVars: *const GcDescVars) -> u32 {
+    _gcDescVars: *const GcDescVars,
+) -> u32 {
     println!("GC_Initialize!");
 
     unsafe {

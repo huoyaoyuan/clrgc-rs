@@ -4,9 +4,9 @@ mod gc_heap;
 mod gc_to_clr;
 mod handle_manager;
 
-pub use gc_heap::IGCHeap;
-pub use gc_to_clr::{IGCToCLR, GCToCLR, SuspendReason, ScanFlags};
-pub use handle_manager::IGCHandleManager;
+pub use gc_heap::*;
+pub use gc_to_clr::*;
+pub use handle_manager::*;
 
 #[repr(C)]
 pub struct GcDescVars {

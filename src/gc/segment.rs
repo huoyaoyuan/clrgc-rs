@@ -1,6 +1,6 @@
 use bitvec::{BitArr, order::Lsb0};
 
-use crate::objects::{Object, ObjectRef};
+use crate::objects::*;
 use crate::utils::IndexOfPtr;
 
 pub struct Segment {
@@ -26,10 +26,10 @@ pub trait Seg {
 }
 
 impl Segment {
-    pub const SIZE : usize = 32768;
-    pub const FLAGS_SIZE : usize = Self::SIZE / size_of::<usize>();
+    pub const SIZE: usize = 32768;
+    pub const FLAGS_SIZE: usize = Self::SIZE / size_of::<usize>();
 
-    pub fn new_boxed() -> Box::<Self> {
+    pub fn new_boxed() -> Box<Self> {
         unsafe { Box::new_zeroed().assume_init() }
     }
 
@@ -115,11 +115,11 @@ impl Seg for Segment {
 
         alive
     }
-    
+
     fn set_alloc_completed(&mut self) {
         self.alloc_completed = true;
     }
-    
+
     fn get_alloc_completed(&self) -> bool {
         self.alloc_completed
     }
@@ -152,7 +152,7 @@ impl Iterator for RawSegmentIter {
 pub struct LargeSegment {
     data: Box<[usize]>,
     mark: bool,
-    finalization_pending: bool
+    finalization_pending: bool,
 }
 
 impl LargeSegment {
@@ -161,7 +161,7 @@ impl LargeSegment {
         Self {
             data: Box::from_iter(vec![0; size / size_of::<usize>()]),
             mark: false,
-            finalization_pending: false
+            finalization_pending: false,
         }
     }
 
@@ -180,11 +180,11 @@ impl Seg for LargeSegment {
     }
 
     fn contains(&self, or: ObjectRef) -> bool {
-        self.data.as_ptr_range().contains(&(or as *const usize))
+        self.data[1..].as_ptr_range().contains(&(or as *const usize))
     }
 
     fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
-        if self.contains(or_maybe) { Some(self.as_object_ref()) } else { None }
+        self.contains(or_maybe).then(|| self.as_object_ref())
     }
 
     fn mark_object(&mut self, or: ObjectRef) -> Result<bool, ()> {
@@ -228,7 +228,7 @@ impl Seg for LargeSegment {
 
     fn sweep(&mut self) -> bool { !self.mark }
     
-    fn set_alloc_completed(&mut self) { }
-    
+    fn set_alloc_completed(&mut self) {}
+
     fn get_alloc_completed(&self) -> bool { true }
 }
