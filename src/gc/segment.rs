@@ -21,6 +21,7 @@ pub trait Seg {
     fn mark_object(&mut self, or: ObjectRef, pin: bool) -> Result<bool, ()>;
     fn is_marked(&self, or: ObjectRef) -> Result<bool, ()>;
     fn is_pinned(&self, or: ObjectRef) -> Result<bool, ()>;
+    fn contains_pinned(&self) -> bool;
     fn clear_flags(&mut self);
     fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()>;
     fn get_finalization_pending(&self, or: ObjectRef) -> Result<bool, ()>;
@@ -33,7 +34,7 @@ pub trait Seg {
 
 impl Segment {
     pub const SIZE: usize = 32768;
-    pub const FLAGS_SIZE: usize = Self::SIZE / size_of::<usize>();
+    pub const POINTER_SIZE: usize = Self::SIZE / size_of::<usize>();
 
     pub fn new_boxed() -> Box<Self> {
         unsafe { Box::new_zeroed().assume_init() }
@@ -68,7 +69,7 @@ impl Seg for Segment {
     fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
         unsafe {
             self.iter_raw().find_map(|(o, size)|
-                ((*o).method_table != &EMPTY_MT && or_maybe.byte_offset_from_unsigned(o) < size)
+                ((*o).method_table != &EMPTY_MT && (or_maybe.byte_offset_from(o) as usize) < size)
                     .then_some(o))
         }
     }
@@ -89,6 +90,10 @@ impl Seg for Segment {
     fn is_pinned(&self, or: ObjectRef) -> Result<bool, ()> {
         let index = self.get_index(or)?;
         Ok(self.pin[index])
+    }
+
+    fn contains_pinned(&self) -> bool {
+        self.pin.any()
     }
 
     fn clear_flags(&mut self) {
@@ -247,6 +252,10 @@ impl Seg for LargeSegment {
         } else {
             Err(())
         }
+    }
+
+    fn contains_pinned(&self) -> bool {
+        true
     }
 
     fn clear_flags(&mut self) {

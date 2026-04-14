@@ -4,7 +4,7 @@ mod unsafe_ref;
 
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::ptr::null_mut;
+use std::ptr::{null_mut, slice_from_raw_parts};
 use std::sync::{Mutex, RwLock};
 use std::vec;
 
@@ -94,8 +94,7 @@ impl RustGc {
                     try_mark_push(&mut mark_queue, obj, f.contains(ScanFlags::Pinned));
                 }
             });
-        let stack_roots = mark_queue.len();
-        println!("Encountered {} roots from stack.", mark_queue.len());
+        // println!("Encountered {} roots from stack.", mark_queue.len());
 
         for h in handle_table_lock.iter().filter(|h| !h.object.is_null()) {
             match h.handle_type {
@@ -104,7 +103,7 @@ impl RustGc {
                 _ => {}
             }
         }
-        println!("Encountered {} roots from handle.", mark_queue.len() - stack_roots);
+        // println!("Encountered {} roots from stack & handle.", mark_queue.len() - stack_roots);
 
         for f in self.finalization_queue.lock().unwrap().iter() {
             try_mark_push(&mut mark_queue, *f, false);
@@ -152,8 +151,8 @@ impl RustGc {
             }
 
             let mut q = self.finalization_queue.lock().unwrap();
-            println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
-            q.append(&mut finalizables);
+            // println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
+            q.extend(finalizables);
             has_finalizable = !q.is_empty();
         }
 
@@ -200,34 +199,106 @@ impl RustGc {
         // Start sweep phase
         {
             let mut w = self.segments.write().unwrap();
-            let mut incomplete = 0;
             let mut i = 0;
             while i < w.len() {
                 let seg = &mut w[i];
-                if !seg.get_alloc_completed() {
-                    incomplete += 1;
-                }
                 if seg.sweep() {
-                    seg.clear_flags();
                     i += 1;
                 } else {
                     println!("Removing empty segment at {:016x}", seg.data().as_ptr() as usize);
                     w.remove(i);
                 }
             }
-            println!("Segments ineligible for compact: {}", incomplete);
-        }
 
-        {
-            let r = self.segments.read().unwrap();
-            let heap_count = r.iter().flat_map(|s| s.iter()).count();
-            let heap_bytes = r.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
+            let heap_count = w.iter().flat_map(|s| s.iter()).count();
+            let heap_bytes = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
             println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
 
-            let alive_bytes = r.iter().map(|s| s.alive_bytes()).sum::<usize>();
-            let trailing_space = r.iter().map(|s| s.get_mut().available_space_with_header().len()).sum::<usize>() * size_of::<usize>();
-            println!("{} segments available. Total used size: {}, Total trailing space: {}", r.len(), alive_bytes, trailing_space);
-            assert_eq!(heap_bytes, alive_bytes);
+            println!("Segments active for allocation: {}", w.iter().filter(|s| !s.get_alloc_completed()).count());
+            println!("Segments contains pinned object: {}", w.iter().filter(|s| s.contains_pinned()).count());
+
+            const COMPACT_THRESHOLD: usize = Segment::SIZE / 4;
+            let dropped_segments: Vec<_> = w.extract_if(.., |s| !s.contains_pinned() && s.alive_bytes() < COMPACT_THRESHOLD).collect();
+            if dropped_segments.len() > 1 {
+                // Compact small segments
+                let mut destination = Segment::new_boxed();
+                destination.set_alloc_completed();
+                let mut data = destination.available_space_with_header();
+                for seg in dropped_segments.iter() {
+                    for or in seg.iter() {
+                        let ptr_size = unsafe { (*or).total_size_aligned() / size_of::<usize>() };
+                        if data.len() < ptr_size {
+                            w.push(UnsafeRef::new(destination));
+                            destination = Segment::new_boxed();
+                            destination.set_alloc_completed();
+                            data = destination.available_space_with_header();
+                        }
+
+                        let src = unsafe { &*slice_from_raw_parts((or as *const usize).wrapping_sub(1), ptr_size) };
+                        data[..ptr_size].copy_from_slice(src);
+                        unsafe {
+                            *(or as *mut usize).wrapping_sub(1) = &raw const data[1] as usize;
+                        }
+                        // println!("Copied object sized {} from {:016x} to {:016x}", ptr_size * size_of::<usize>(), or as usize, &raw const data[1] as usize);
+
+                        data = &mut data[ptr_size..];
+                    }
+                    println!("Dropping moved segment at {:016x}", seg.data().as_ptr() as usize);
+                }
+                w.push(UnsafeRef::new(destination));
+
+                // Modify moved references
+                let fix_ref = |pp_obj: &mut ObjectRef| {
+                    if dropped_segments.iter().any(|s| s.contains(*pp_obj)) {
+                        let move_target = unsafe { *(*pp_obj as *mut usize).wrapping_sub(1) };
+                        // println!("Fixing reference at {:016x} from {:016x} to {:016x}", pp_obj as *const ObjectRef as usize, *pp_obj as usize, move_target);
+                        *pp_obj = move_target as ObjectRef;
+                    }
+                };
+                let fix_ref_interior = |pp_obj: &mut ObjectRef| {
+                    let Some(or) = dropped_segments.iter().find_map(|s| s.find_object(*pp_obj)) else { return };
+                    unsafe {
+                        let move_target = *(or as *mut usize).wrapping_sub(1);
+                        let offset = (*pp_obj).byte_offset_from_unsigned(or);
+                        // println!("Fixing interior reference at {:016x} from {:016x} to {:016x}, offset={}", pp_obj as *const ObjectRef as usize, *pp_obj as usize, move_target + offset, offset);
+                        *pp_obj = (move_target + offset) as ObjectRef;
+                    }
+                };
+
+                self.clr.scan_roots(generation, 2, false, false, false,
+                    |pp_obj, _, f| {
+                        if f.contains(ScanFlags::MayBeInterior) {
+                            fix_ref_interior(pp_obj);
+                        } else {
+                            fix_ref(pp_obj);
+                        }
+                    });
+                for seg in w.iter() {
+                    for or in seg.iter() {
+                        let obj = unsafe { &mut *or };
+                        obj.for_each_obj_ref(fix_ref);
+                    }
+                }
+                for h in handle_table_lock.iter_mut() {
+                    fix_ref(&mut h.object);
+                    if h.handle_type == HandleType::Dependent {
+                        unsafe {
+                            fix_ref(std::mem::transmute(&mut h.extra_or_secondary));
+                        }
+                    }
+                }
+            } else {
+                w.extend(dropped_segments);
+            }
+
+            for seg in w.iter_mut() {
+                seg.clear_flags();
+            }
+
+            let heap_count_after = w.iter().flat_map(|s| s.iter()).count();
+            let heap_bytes_after = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
+            assert_eq!(heap_count, heap_count_after);
+            assert_eq!(heap_bytes, heap_bytes_after);
         }
 
         println!("Resuming EE");
