@@ -50,17 +50,17 @@ pub fn align_to_ptr(size: usize) -> usize {
     (size + mask) & !mask
 }
 
+pub static EMPTY_MT: MethodTable = MethodTable {
+    component_size: size_of::<usize>() as u16,
+    flags_high: Object::HAS_COMPONENT_SIZE,
+    base_size: Object::BASE_SIZE as u32,
+};
+
 impl Object {
     pub const HAS_COMPONENT_SIZE: u16 = 0x8000;
     pub const HAS_GC_POINTERS: u16 = 0x0100;
     pub const HAS_FINALIZER: u16 = 0x0010;
     pub const BASE_SIZE: usize = 3 * size_of::<usize>();
-
-    pub const EMPTY: MethodTable = MethodTable {
-        component_size: size_of::<usize>() as u16,
-        flags_high: Object::HAS_COMPONENT_SIZE,
-        base_size: Object::BASE_SIZE as u32,
-    };
 
     #[inline]
     pub fn has_component_size(&self) -> bool {

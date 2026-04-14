@@ -4,11 +4,13 @@ use crate::objects::*;
 use crate::utils::IndexOfPtr;
 
 pub struct Segment {
-    data: [usize; Self::FLAGS_SIZE],
-    mark: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
-    pin: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
-    finalization_pending: BitArr!(for Segment::FLAGS_SIZE, in usize, Lsb0),
+    data: [usize; Self::POINTER_SIZE],
+    mark: BitArr!(for Segment::POINTER_SIZE, in usize, Lsb0),
+    pin: BitArr!(for Segment::POINTER_SIZE, in usize, Lsb0),
+    finalization_pending: BitArr!(for Segment::POINTER_SIZE, in usize, Lsb0),
     alloc_completed: bool,
+    alive_bytes: usize,
+    available_from: usize,
 }
 
 pub trait Seg {
@@ -25,6 +27,8 @@ pub trait Seg {
     fn sweep(&mut self) -> bool;
     fn set_alloc_completed(&mut self);
     fn get_alloc_completed(&self) -> bool;
+    fn alive_bytes(&self) -> usize;
+    fn available_space_with_header(&mut self) -> &mut [usize];
 }
 
 impl Segment {
@@ -39,7 +43,7 @@ impl Segment {
         self.data.index_of(or as *mut usize).ok_or(())
     }
 
-    fn iter_raw(&self) -> impl Iterator<Item = ObjectRef> + 'static {
+    fn iter_raw(&self) -> RawSegmentIter {
         RawSegmentIter { range: self.data.as_ptr_range(), next: &raw const self.data[1] }
     }
 }
@@ -50,7 +54,11 @@ impl Seg for Segment {
     }
 
     fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static> {
-        Box::new(self.iter_raw().filter(|or| unsafe { (**or).method_table != &Object::EMPTY }))
+        unsafe {
+            Box::new(
+                self.iter_raw()
+                    .filter_map(|(or, _)| ((*or).method_table != &EMPTY_MT).then_some(or)))
+        }
     }
 
     fn contains(&self, or: ObjectRef) -> bool {
@@ -58,7 +66,11 @@ impl Seg for Segment {
     }
 
     fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
-        self.iter_raw().find(|o| unsafe { (**o).method_table != &Object::EMPTY && or_maybe.byte_offset_from_unsigned(*o) < (**o).total_size_aligned() })
+        unsafe {
+            self.iter_raw().find_map(|(o, size)|
+                ((*o).method_table != &EMPTY_MT && or_maybe.byte_offset_from_unsigned(o) < size)
+                    .then_some(o))
+        }
     }
 
     fn mark_object(&mut self, or: ObjectRef, pin: bool) -> Result<bool, ()> {
@@ -96,21 +108,22 @@ impl Seg for Segment {
     }
 
     fn sweep(&mut self) -> bool {
-        let mut alive = false;
+        let mut alive_bytes = 0;
         let mut empty_from: Option<ObjectRef> = None;
 
         fn mark_as_empty(from: ObjectRef, to: ObjectRef) {
             unsafe {
                 (*from) = Object {
-                    method_table: &Object::EMPTY,
+                    method_table: &EMPTY_MT,
                     component_count: ((to.byte_offset_from_unsigned(from) - Object::BASE_SIZE) / size_of::<usize>()) as u32,
                 }
             }
         }
 
-        for or in self.iter_raw() {
+        let mut iter = self.iter_raw();
+        for (or, size) in iter.by_ref() {
             if self.is_marked(or).unwrap() {
-                alive = true;
+                alive_bytes += size;
                 if let Some(last) = empty_from {
                     mark_as_empty(last, or);
                 }
@@ -124,7 +137,10 @@ impl Seg for Segment {
             unsafe { (*last).method_table = std::ptr::null() };
         }
 
-        alive
+        let end = empty_from.unwrap_or(iter.next as ObjectRef);
+        self.available_from = self.get_index(end).map_or(Self::POINTER_SIZE, |i| i - 1);
+        self.alive_bytes = alive_bytes;
+        alive_bytes != 0
     }
 
     fn set_alloc_completed(&mut self) {
@@ -134,15 +150,23 @@ impl Seg for Segment {
     fn get_alloc_completed(&self) -> bool {
         self.alloc_completed
     }
+
+    fn alive_bytes(&self) -> usize {
+        self.alive_bytes
+    }
+
+    fn available_space_with_header(&mut self) -> &mut [usize] {
+        &mut self.data[self.available_from..]
+    }
 }
 
 struct RawSegmentIter {
-    next: *const usize,
+    pub next: *const usize,
     range: std::ops::Range<*const usize>,
 }
 
 impl Iterator for RawSegmentIter {
-    type Item = ObjectRef;
+    type Item = (ObjectRef, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
         if !self.range.contains(&self.next) {
@@ -155,8 +179,9 @@ impl Iterator for RawSegmentIter {
         }
 
         let prev = self.next as ObjectRef;
-        self.next = self.next.wrapping_byte_add(obj.total_size_aligned());
-        return Some(prev);
+        let size = obj.total_size_aligned();
+        self.next = self.next.wrapping_byte_add(size);
+        return Some((prev, size));
     }
 }
 
@@ -250,4 +275,8 @@ impl Seg for LargeSegment {
     fn set_alloc_completed(&mut self) {}
 
     fn get_alloc_completed(&self) -> bool { true }
+
+    fn alive_bytes(&self) -> usize { self.data.len() }
+
+    fn available_space_with_header(&mut self) -> &mut [usize] { &mut [] }
 }

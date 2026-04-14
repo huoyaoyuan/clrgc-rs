@@ -179,7 +179,7 @@ impl RustGc {
                         // println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
                         // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
                         heap_count += 1;
-                        heap_bytes += (*or).total_size();
+                        heap_bytes += (*or).total_size_aligned();
                         if seg.is_marked(or).unwrap_or(false) { marked_count += 1; }
                         if seg.is_pinned(or).unwrap_or(false) { pinned_count += 1; }
 
@@ -223,6 +223,11 @@ impl RustGc {
             let heap_count = r.iter().flat_map(|s| s.iter()).count();
             let heap_bytes = r.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
             println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
+
+            let alive_bytes = r.iter().map(|s| s.alive_bytes()).sum::<usize>();
+            let trailing_space = r.iter().map(|s| s.get_mut().available_space_with_header().len()).sum::<usize>() * size_of::<usize>();
+            println!("{} segments available. Total used size: {}, Total trailing space: {}", r.len(), alive_bytes, trailing_space);
+            assert_eq!(heap_bytes, alive_bytes);
         }
 
         println!("Resuming EE");
