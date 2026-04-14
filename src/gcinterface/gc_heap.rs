@@ -2,7 +2,7 @@ use std::ptr::null_mut;
 
 use super::*;
 use crate::gc::RustGc;
-use crate::objects::ObjectRef;
+use crate::objects::*;
 
 #[repr(C)]
 pub struct gc_alloc_context {
@@ -164,6 +164,7 @@ extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
 }
 
 extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, _flags: u32) -> ObjectRef {
+    let size = align_to_ptr(size);
     let context = unsafe { &mut *acontext };
     let obj = context.alloc_ptr as ObjectRef;
     let new_ptr = context.alloc_ptr + size;

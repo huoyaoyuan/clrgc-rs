@@ -45,9 +45,9 @@ bitflags! {
 
 pub type ObjectRef = *mut Object;
 
-fn align_to_ptr(size: u32) -> usize {
+pub fn align_to_ptr(size: usize) -> usize {
     let mask = size_of::<usize>() - 1;
-    (size as usize + mask) & !mask
+    (size + mask) & !mask
 }
 
 impl Object {
@@ -99,7 +99,7 @@ impl Object {
 
     #[inline]
     pub fn total_size_aligned(&self) -> usize {
-        align_to_ptr(self.total_size())
+        align_to_ptr(self.total_size() as usize)
     }
 
     pub fn for_each_obj_ref<F: FnMut(&mut ObjectRef)>(&mut self, mut f: F) {
