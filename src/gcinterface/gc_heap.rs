@@ -1,4 +1,5 @@
 use std::ptr::null_mut;
+use bitflags::bitflags;
 
 use super::*;
 use crate::gc::RustGc;
@@ -13,6 +14,20 @@ pub struct gc_alloc_context {
     gc_reserved_1: usize,
     gc_reserved_2: usize,
     alloc_count: i32,
+}
+
+bitflags! {
+    #[repr(transparent)]
+    pub struct AllocFlags : i32 {
+        const Finalizable = 1;
+        const ContainsReference = 2;
+        const Align8Bias = 4;
+        const Align8 = 8;
+        const ZeroingOptional = 16;
+        const LargeObjectHeap = 32;
+        const PinnedObjectHeap = 64;
+        const UserOldHeap = Self::LargeObjectHeap.bits() | Self::PinnedObjectHeap.bits();
+    }
 }
 
 #[repr(C)]
@@ -112,7 +127,7 @@ pub struct IGCHeapVTable {
     // GetLastGCDuration: unsafe extern "system" fn (this: *mut IGCHeap, generation: i32) -> isize,
     // GetNow: unsafe extern "system" fn (this: *mut IGCHeap, generation: i32) -> isize,
     // Allocation routines
-    Alloc: extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, flags: u32) -> ObjectRef,
+    Alloc: extern "system" fn (this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, flags: AllocFlags) -> ObjectRef,
     alloc: [DummyFunc; 3],
     // PublishObject: unsafe extern "system" fn (this: *mut IGCHeap, obj: usize),
     // SetWaitForGCEvent: unsafe extern "system" fn (this: *mut IGCHeap),
@@ -163,13 +178,15 @@ extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     0
 }
 
-extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, _flags: u32) -> ObjectRef {
+extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, flags: AllocFlags) -> ObjectRef {
+    if flags.intersects(AllocFlags::Align8 | AllocFlags::Align8Bias) {
+        unimplemented!()
+    }
     let size = align_to_ptr(size);
     let context = unsafe { &mut *acontext };
     let obj = context.alloc_ptr as ObjectRef;
-    let new_ptr = context.alloc_ptr + size;
-    if new_ptr < context.alloc_limit {
-        context.alloc_ptr = new_ptr;
+    if context.alloc_limit - context.alloc_ptr >= size {
+        context.alloc_ptr = context.alloc_ptr + size;
         obj
     } else {
         if context.alloc_limit != 0 {
@@ -179,11 +196,12 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
         // Trigger a GC for each new segment
         get_gc(this).do_collect(0);
 
-        let segment = get_gc(this).add_segment(size);
+        let segment = get_gc(this).add_segment(size, flags.contains(AllocFlags::PinnedObjectHeap));
         println!("Allocated new segment at {:016x}, Length {}", segment.start as usize, unsafe { segment.end.byte_offset_from(segment.start) });
         let obj_ptr = segment.start.wrapping_add(1);
         context.alloc_ptr = obj_ptr as usize + size;
         context.alloc_limit = segment.end as usize;
+        debug_assert!(context.alloc_limit >= context.alloc_ptr);
         obj_ptr as ObjectRef
     }
 }

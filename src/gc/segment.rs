@@ -198,9 +198,9 @@ pub struct LargeSegment {
 
 impl LargeSegment {
     pub fn new(size: usize) -> Self {
-        assert!(size % size_of::<usize>() == 0);
+        debug_assert!(size % size_of::<usize>() == 0);
         Self {
-            data: Box::from_iter(vec![0; size / size_of::<usize>()]),
+            data: Box::from_iter(vec![0; size / size_of::<usize>() + 1]),
             mark: false,
             finalization_pending: false,
         }
@@ -279,13 +279,13 @@ impl Seg for LargeSegment {
         }
     }
 
-    fn sweep(&mut self) -> bool { !self.mark }
+    fn sweep(&mut self) -> bool { self.mark }
     
     fn set_alloc_completed(&mut self) {}
 
     fn get_alloc_completed(&self) -> bool { true }
 
-    fn alive_bytes(&self) -> usize { self.data.len() }
+    fn alive_bytes(&self) -> usize { self.data.len() * size_of::<usize>() }
 
     fn available_space_with_header(&mut self) -> &mut [usize] { &mut [] }
 }

@@ -31,12 +31,12 @@ impl RustGc {
         }
     }
 
-    pub fn add_segment(&mut self, size: usize) -> Range<*const usize> {
+    pub fn add_segment(&mut self, size: usize, pin: bool) -> Range<*const usize> {
         let new_seg: Box<dyn Seg> =
-            if size <= Segment::SIZE {
-                Segment::new_boxed()
-            } else {
+            if pin || size >= Segment::SIZE {
                 Box::new(LargeSegment::new(size))
+            } else {
+                Segment::new_boxed() 
             };
         let mut w = self.segments.write().unwrap();
         let range = new_seg.data().as_ptr_range();
