@@ -50,11 +50,7 @@ pub fn align_to_ptr(size: usize) -> usize {
     (size + mask) & !mask
 }
 
-pub static EMPTY_MT: MethodTable = MethodTable {
-    component_size: size_of::<usize>() as u16,
-    flags_high: Object::HAS_COMPONENT_SIZE,
-    base_size: Object::BASE_SIZE as u32,
-};
+pub static mut FREE_MT: *const MethodTable = std::ptr::null();
 
 impl Object {
     pub const HAS_COMPONENT_SIZE: u16 = 0x8000;

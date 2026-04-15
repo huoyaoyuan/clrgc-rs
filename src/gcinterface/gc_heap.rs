@@ -169,6 +169,15 @@ extern "system" fn GCHeap_RegisterForFinalization(this: *mut IGCHeap, _: i32, ob
 extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     println!("GCHeap::Initialize");
 
+    unsafe {
+        FREE_MT = get_gc(this).clr.get_free_methodtable();
+        if FREE_MT.is_null()
+            || (*FREE_MT).component_size != 1
+            || (*FREE_MT).base_size != Object::BASE_SIZE as u32 {
+            return 80004005;
+        }
+    }
+
     let mut write_barrier_args = WriteBarrierParameters::default();
     write_barrier_args.operation = WriteBarrierOp::Initialize;
     write_barrier_args.is_runtime_suspended = true;

@@ -58,7 +58,7 @@ impl Seg for Segment {
         unsafe {
             Box::new(
                 self.iter_raw()
-                    .filter_map(|(or, _)| ((*or).method_table != &EMPTY_MT).then_some(or)))
+                    .filter_map(|(or, _)| ((*or).method_table != FREE_MT).then_some(or)))
         }
     }
 
@@ -69,7 +69,7 @@ impl Seg for Segment {
     fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef> {
         unsafe {
             self.iter_raw().find_map(|(o, size)|
-                ((*o).method_table != &EMPTY_MT && (or_maybe.byte_offset_from(o) as usize) < size)
+                ((*o).method_table != FREE_MT && (or_maybe.byte_offset_from(o) as usize) < size)
                     .then_some(o))
         }
     }
@@ -119,8 +119,8 @@ impl Seg for Segment {
         fn mark_as_empty(from: ObjectRef, to: ObjectRef) {
             unsafe {
                 (*from) = Object {
-                    method_table: &EMPTY_MT,
-                    component_count: ((to.byte_offset_from_unsigned(from) - Object::BASE_SIZE) / size_of::<usize>()) as u32,
+                    method_table: FREE_MT,
+                    component_count: (to.byte_offset_from_unsigned(from) - Object::BASE_SIZE) as u32,
                 }
             }
         }

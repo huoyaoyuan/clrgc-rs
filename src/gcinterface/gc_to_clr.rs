@@ -2,7 +2,7 @@ use std::ffi::{c_char, c_void};
 use bitflags::bitflags;
 
 use super::gc_alloc_context;
-use crate::objects::ObjectRef;
+use crate::objects::*;
 
 #[repr(C)]
 pub struct IGCToCLR {
@@ -92,6 +92,9 @@ struct IGCToClrVTable {
     diag: [usize; 7],
     StompWriteBarrier: extern "system" fn(this: *const IGCToCLR, args: *const WriteBarrierParameters),
     EnableFinalization: extern "system" fn(this: *const IGCToCLR, gcHasWorkForFinalizerThread: bool),
+    HandleFatalError: extern "system" fn(this: *const IGCToCLR, exit_code: u32),
+    EagerFinalized: extern "system" fn(this: *const IGCToCLR, object: ObjectRef) -> bool,
+    GetFreeObjectMethodTable: extern "system" fn(this: *const IGCToCLR) -> *const MethodTable,
 }
 
 pub struct GCToCLR {
@@ -166,5 +169,9 @@ impl GCToCLR {
 
     pub fn enable_finalization(&self, has_finalizable: bool) {
         (self.vtable().EnableFinalization)(self.ptr, has_finalizable);
+    }
+
+    pub fn get_free_methodtable(&self) -> *const MethodTable {
+        (self.vtable().GetFreeObjectMethodTable)(self.ptr)
     }
 }
