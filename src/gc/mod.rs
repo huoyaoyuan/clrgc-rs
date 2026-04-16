@@ -44,12 +44,6 @@ impl RustGc {
         range
     }
 
-    pub fn complete_segment(&mut self, segment_end: usize) {
-        let r = self.segments.read().unwrap();
-        let Some(segment) = r.iter().find(|s| s.data().as_ptr_range().end as usize == segment_end) else { return };
-        segment.get_mut().set_alloc_completed();
-    }
-
     pub fn do_collect(&mut self, generation: i32) {
         println!("GC triggered for generation {}", generation);
 
@@ -194,14 +188,29 @@ impl RustGc {
             }
         }
         println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}. Pinned: {}.", heap_count, heap_bytes, marked_count, pinned_count);
-        println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
+        // println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
 
         // Start sweep phase
         {
             let mut w = self.segments.write().unwrap();
+
+            self.clr.for_each_alloc_context(|c| {
+                if c.alloc_limit != 0 {
+                    w.iter_mut()
+                        .find(|s| s.data().as_ptr_range().end == c.alloc_limit as *const usize)
+                        .unwrap()
+                        .set_in_use();
+                }
+            });
+
             let mut i = 0;
             while i < w.len() {
                 let seg = &mut w[i];
+                if seg.get_in_use() {
+                    i += 1;
+                    continue;
+                }
+
                 if seg.sweep() {
                     i += 1;
                 } else {
@@ -212,17 +221,16 @@ impl RustGc {
 
             let heap_count = w.iter().flat_map(|s| s.iter()).count();
             let heap_bytes = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
-            println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
-
-            println!("Segments active for allocation: {}", w.iter().filter(|s| !s.get_alloc_completed()).count());
-            println!("Segments contains pinned object: {}", w.iter().filter(|s| s.contains_pinned()).count());
+            // println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
 
             const COMPACT_THRESHOLD: usize = Segment::SIZE / 4;
-            let dropped_segments: Vec<_> = w.extract_if(.., |s| !s.contains_pinned() && s.alive_bytes() < COMPACT_THRESHOLD).collect();
+            let dropped_segments: Vec<_> = w
+                .extract_if(.., |s|
+                    !s.get_in_use() && !s.contains_pinned() && s.alive_bytes() < COMPACT_THRESHOLD)
+                .collect();
             if dropped_segments.len() > 1 {
                 // Compact small segments
                 let mut destination = Segment::new_boxed();
-                destination.set_alloc_completed();
                 let mut data = destination.available_space_with_header();
                 for seg in dropped_segments.iter() {
                     for or in seg.iter() {
@@ -230,7 +238,6 @@ impl RustGc {
                         if data.len() < ptr_size {
                             w.push(UnsafeRef::new(destination));
                             destination = Segment::new_boxed();
-                            destination.set_alloc_completed();
                             data = destination.available_space_with_header();
                         }
 

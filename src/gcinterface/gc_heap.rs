@@ -7,8 +7,8 @@ use crate::objects::*;
 
 #[repr(C)]
 pub struct gc_alloc_context {
-    alloc_ptr: usize,
-    alloc_limit: usize,
+    pub alloc_ptr: usize,
+    pub alloc_limit: usize,
     alloc_bytes: i64,
     alloc_bytes_uoh: i64,
     gc_reserved_1: usize,
@@ -198,15 +198,11 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
         context.alloc_ptr = context.alloc_ptr + size;
         obj
     } else {
-        if context.alloc_limit != 0 {
-            get_gc(this).complete_segment(context.alloc_limit);
-        }
-
         // Trigger a GC for each new segment
         get_gc(this).do_collect(0);
 
         let segment = get_gc(this).add_segment(size, flags.contains(AllocFlags::PinnedObjectHeap));
-        println!("Allocated new segment at {:016x}, Length {}", segment.start as usize, unsafe { segment.end.byte_offset_from(segment.start) });
+        println!("Allocated new segment at {:016x}-{:016x}, Length {}", segment.start as usize, segment.end as usize, unsafe { segment.end.byte_offset_from(segment.start) });
         let obj_ptr = segment.start.wrapping_add(1);
         context.alloc_ptr = obj_ptr as usize + size;
         context.alloc_limit = segment.end as usize;

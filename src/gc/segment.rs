@@ -8,7 +8,7 @@ pub struct Segment {
     mark: BitArr!(for Segment::POINTER_SIZE, in usize, Lsb0),
     pin: BitArr!(for Segment::POINTER_SIZE, in usize, Lsb0),
     finalization_pending: BitArr!(for Segment::POINTER_SIZE, in usize, Lsb0),
-    alloc_completed: bool,
+    in_use: bool,
     alive_bytes: usize,
     available_from: usize,
 }
@@ -26,8 +26,8 @@ pub trait Seg {
     fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()>;
     fn get_finalization_pending(&self, or: ObjectRef) -> Result<bool, ()>;
     fn sweep(&mut self) -> bool;
-    fn set_alloc_completed(&mut self);
-    fn get_alloc_completed(&self) -> bool;
+    fn set_in_use(&mut self);
+    fn get_in_use(&self) -> bool;
     fn alive_bytes(&self) -> usize;
     fn available_space_with_header(&mut self) -> &mut [usize];
 }
@@ -99,6 +99,7 @@ impl Seg for Segment {
     fn clear_flags(&mut self) {
         self.mark.fill(false);
         self.pin.fill(false);
+        self.in_use = false;
     }
 
     fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()> {
@@ -148,12 +149,12 @@ impl Seg for Segment {
         alive_bytes != 0
     }
 
-    fn set_alloc_completed(&mut self) {
-        self.alloc_completed = true;
+    fn set_in_use(&mut self) {
+        self.in_use = true;
     }
 
-    fn get_alloc_completed(&self) -> bool {
-        self.alloc_completed
+    fn get_in_use(&self) -> bool {
+        self.in_use
     }
 
     fn alive_bytes(&self) -> usize {
@@ -194,6 +195,7 @@ pub struct LargeSegment {
     data: Box<[usize]>,
     mark: bool,
     finalization_pending: bool,
+    in_use: bool,
 }
 
 impl LargeSegment {
@@ -203,6 +205,7 @@ impl LargeSegment {
             data: Box::from_iter(vec![0; size / size_of::<usize>() + 1]),
             mark: false,
             finalization_pending: false,
+            in_use: false,
         }
     }
 
@@ -260,6 +263,7 @@ impl Seg for LargeSegment {
 
     fn clear_flags(&mut self) {
         self.mark = false;
+        self.in_use = false;
     }
 
     fn set_finalization_pending(&mut self, or: ObjectRef, pending: bool) -> Result<(), ()> {
@@ -281,9 +285,13 @@ impl Seg for LargeSegment {
 
     fn sweep(&mut self) -> bool { self.mark }
     
-    fn set_alloc_completed(&mut self) {}
+    fn set_in_use(&mut self) {
+        self.in_use = true;
+    }
 
-    fn get_alloc_completed(&self) -> bool { true }
+    fn get_in_use(&self) -> bool {
+        self.in_use
+    }
 
     fn alive_bytes(&self) -> usize { self.data.len() * size_of::<usize>() }
 
