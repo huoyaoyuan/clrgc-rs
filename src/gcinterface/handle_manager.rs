@@ -55,7 +55,7 @@ extern "system" fn GCHandleStore_CreateDependentHandle(this: *mut IGCHandleStore
     create_handle(get_gc_store(this), primary, secondary as usize, HandleType::Dependent)
 }
 
-const GCHandleStore_vtable : IGCHandleStoreVTable = IGCHandleStoreVTable {
+static GCHandleStore_vtable : IGCHandleStoreVTable = IGCHandleStoreVTable {
     Uproot: GCHandleStore_Nop,
     ContainsHandle: GCHandleStore_ContainsHandle,
     CreateHandleOfType: GCHandleStore_CreateHandleOfType,
@@ -169,7 +169,7 @@ extern "system" fn GCHandleManager_HandleFetchType(_: *mut IGCHandleManager, han
     unsafe { (*handle).handle_type }
 }
 
-const GCHandleManager_vtable: IGCHandleManagerVTable = IGCHandleManagerVTable {
+static GCHandleManager_vtable: IGCHandleManagerVTable = IGCHandleManagerVTable {
     Initialize: GCHandleManager_Initialize,
     Shutdown: GCHandleManager_Nop,
     GetGlobalHandleStore: GCHandleManager_GetGlobalHandleStore,

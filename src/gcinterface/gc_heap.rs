@@ -211,7 +211,7 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
     }
 }
 
-const GCHeap_vtable: IGCHeapVTable = IGCHeapVTable {
+static GCHeap_vtable: IGCHeapVTable = IGCHeapVTable {
     hosting: [nop; 4],
     concurrent: [nop; 6],
     GetNumberOfFinalizable: GCHeap_GetNumberOfFinalizable,
