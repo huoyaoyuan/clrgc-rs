@@ -294,6 +294,9 @@ impl RustGc {
                         }
                     }
                 }
+                for f in self.finalization_queue.lock().unwrap().iter_mut() {
+                    fix_ref(f);
+                }
             } else {
                 w.extend(dropped_segments);
             }
