@@ -55,18 +55,15 @@ impl RustGc {
         let r = self.segments.read().unwrap();
         let find_segment = |or: ObjectRef| r.iter().find(|s| s.contains(or));
 
-        let mark_object = |or: ObjectRef, pin: bool| {
-            let segment = find_segment(or).ok_or(())?;
-            segment.get_mut().mark_object(or, pin)
-        };
-
         let is_object_dead = |or: ObjectRef|
             or.is_null() || find_segment(or).is_some_and(|seg| !seg.is_marked(or).unwrap());
 
         let mut mark_queue: VecDeque<ObjectRef> = VecDeque::new();
         let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef, pin: bool| {
-            if mark_object(or, pin).unwrap_or(false) {
-                mark_queue.push_back(or);
+            if !or.is_null() && let Some(segment) = find_segment(or) {
+                if segment.get_mut().mark_object(or, pin).unwrap() {
+                    mark_queue.push_back(or);
+                }
             }
         };
         let populate_fields = |mut mark_queue: &mut VecDeque<ObjectRef>| {
