@@ -15,6 +15,7 @@ pub struct Segment {
 
 pub trait Seg {
     fn data(&self) -> &[usize];
+    fn data_mut(&mut self) -> &mut [usize];
     fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static>;
     fn contains(&self, or: ObjectRef) -> bool;
     fn find_object(&self, or_maybe: ObjectRef) -> Option<ObjectRef>;
@@ -52,6 +53,10 @@ impl Segment {
 impl Seg for Segment {
     fn data(&self) -> &[usize] {
         &self.data
+    }
+
+    fn data_mut(&mut self) -> &mut [usize] {
+        &mut self.data
     }
 
     fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static> {
@@ -216,7 +221,11 @@ impl LargeSegment {
 
 impl Seg for LargeSegment {
     fn data(&self) -> &[usize] {
-        self.data.as_ref()
+        &self.data
+    }
+
+    fn data_mut(&mut self) -> &mut [usize] {
+        &mut self.data
     }
 
     fn iter(&self) -> Box<dyn Iterator<Item = ObjectRef> + 'static> {

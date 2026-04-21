@@ -231,24 +231,29 @@ impl RustGc {
             if dropped_segments.len() > 1 {
                 // Compact small segments
                 let mut destination = Segment::new_boxed();
-                let mut data = destination.available_space_with_header();
+                let mut index = 0;
                 for seg in dropped_segments.iter() {
                     for or in seg.iter() {
+                        debug_assert!(seg.is_marked(or).unwrap());
+                        debug_assert!(!seg.is_pinned(or).unwrap());
                         let ptr_size = unsafe { (*or).total_size_aligned() / size_of::<usize>() };
-                        if data.len() < ptr_size {
+                        if seg.data().len() - index < ptr_size {
                             w.push(UnsafeRef::new(destination));
                             destination = Segment::new_boxed();
-                            data = destination.available_space_with_header();
+                            index = 0;
                         }
 
                         let src = unsafe { &*slice_from_raw_parts((or as *const usize).wrapping_sub(1), ptr_size) };
+                        let data = &mut destination.data_mut()[index..];
+                        let new_or = &raw const data[1] as ObjectRef;
                         data[..ptr_size].copy_from_slice(src);
                         unsafe {
-                            *(or as *mut usize).wrapping_sub(1) = &raw const data[1] as usize;
+                            *(or as *mut usize).wrapping_sub(1) = new_or as usize;
                         }
-                        // println!("Copied object sized {} from {:016x} to {:016x}", ptr_size * size_of::<usize>(), or as usize, &raw const data[1] as usize);
+                        destination.set_finalization_pending(new_or, seg.get_finalization_pending(or).unwrap()).unwrap();
+                        // println!("Copied object sized {} from {:016x} to {:016x}", ptr_size * size_of::<usize>(), or as usize, new_or as usize);
 
-                        data = &mut data[ptr_size..];
+                        index += ptr_size;
                     }
                     println!("Dropping moved segment at {:016x}", seg.data().as_ptr() as usize);
                 }
