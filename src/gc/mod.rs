@@ -61,12 +61,18 @@ impl RustGc {
         };
 
         let is_object_dead = |or: ObjectRef|
-            !or.is_null() && find_segment(or).is_some_and(|seg| !seg.is_marked(or).unwrap());
+            or.is_null() || find_segment(or).is_some_and(|seg| !seg.is_marked(or).unwrap());
 
         let mut mark_queue: VecDeque<ObjectRef> = VecDeque::new();
         let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef, pin: bool| {
             if mark_object(or, pin).unwrap_or(false) {
                 mark_queue.push_back(or);
+            }
+        };
+        let populate_fields = |mut mark_queue: &mut VecDeque<ObjectRef>| {
+            while let Some(or) = mark_queue.pop_front() {
+                let obj = unsafe { &mut *or };
+                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
             }
         };
 
@@ -103,10 +109,15 @@ impl RustGc {
             try_mark_push(&mut mark_queue, *f, false);
         }
 
-        while let Some(or) = mark_queue.pop_front() {
-            let obj = unsafe { &mut *or };
-            obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
+        populate_fields(&mut mark_queue);
+
+        for h in handle_table_lock.iter().filter(|h| h.handle_type == HandleType::Dependent) {
+            if !is_object_dead(h.object) {
+                try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
+            }
         }
+
+        populate_fields(&mut mark_queue);
 
         for h in handle_table_lock.iter_mut() {
             if h.handle_type == HandleType::Short && is_object_dead(h.object) {
@@ -130,19 +141,16 @@ impl RustGc {
                 }
             }
 
-            // Dependent handle target are treated similar to fields
             for h in handle_table_lock.iter_mut().filter(|h| h.handle_type == HandleType::Dependent) {
-                if h.object.is_null() || is_object_dead(h.object) {
+                if is_object_dead(h.object) {
+                    h.object = null_mut();
                     h.extra_or_secondary = 0;
                 } else {
                     try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
                 }
             }
 
-            while let Some(or) = mark_queue.pop_front() {
-                let obj = unsafe { &mut *or };
-                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
-            }
+            populate_fields(&mut mark_queue);
 
             let mut q = self.finalization_queue.lock().unwrap();
             // println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
