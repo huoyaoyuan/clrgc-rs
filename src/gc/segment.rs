@@ -1,3 +1,4 @@
+use std::ops::Range;
 use bitvec::{BitArr, order::Lsb0};
 
 use crate::objects::*;
@@ -30,7 +31,8 @@ pub trait Seg {
     fn set_in_use(&mut self);
     fn get_in_use(&self) -> bool;
     fn alive_bytes(&self) -> usize;
-    fn available_space_with_header(&mut self) -> &mut [usize];
+    fn available_range(&self) -> Range<usize>;
+    fn update_available_range(&mut self, available_from: usize);
 }
 
 impl Segment {
@@ -119,6 +121,8 @@ impl Seg for Segment {
     }
 
     fn sweep(&mut self) -> bool {
+        debug_assert!(!self.get_in_use());
+
         let mut alive_bytes = 0;
         let mut empty_from: Option<ObjectRef> = None;
 
@@ -166,8 +170,16 @@ impl Seg for Segment {
         self.alive_bytes
     }
 
-    fn available_space_with_header(&mut self) -> &mut [usize] {
-        &mut self.data[self.available_from..]
+    fn available_range(&self) -> Range<usize> {
+        self.available_from..self.data.len()
+    }
+
+    fn update_available_range(&mut self, available_from: usize) {
+        self.available_from = available_from;
+        debug_assert!(available_from < self.data.len());
+        if available_from != self.data.len() - 1 {
+            self.data[available_from + 1] = 0; // method table
+        }
     }
 }
 
@@ -304,5 +316,9 @@ impl Seg for LargeSegment {
 
     fn alive_bytes(&self) -> usize { self.data.len() * size_of::<usize>() }
 
-    fn available_space_with_header(&mut self) -> &mut [usize] { &mut [] }
+    fn available_range(&self) -> Range<usize> { 0..0 }
+
+    fn update_available_range(&mut self, _: usize) {
+        unimplemented!()
+    }
 }

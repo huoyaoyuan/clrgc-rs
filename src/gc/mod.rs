@@ -208,21 +208,7 @@ impl RustGc {
                 }
             });
 
-            let mut i = 0;
-            while i < w.len() {
-                let seg = &mut w[i];
-                if seg.get_in_use() {
-                    i += 1;
-                    continue;
-                }
-
-                if seg.sweep() {
-                    i += 1;
-                } else {
-                    println!("Removing empty segment at {:016x}", seg.data().as_ptr() as usize);
-                    w.remove(i);
-                }
-            }
+            let mut empty: VecDeque<_> = w.extract_if(.., |s| !s.get_in_use() && !s.sweep()).collect();
 
             let heap_count = w.iter().flat_map(|s| s.iter()).count();
             let heap_bytes = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
@@ -235,18 +221,21 @@ impl RustGc {
                 .collect();
             if dropped_segments.len() > 1 {
                 // Compact small segments
-                let mut destination = Segment::new_boxed();
-                let mut index = 0;
                 for seg in dropped_segments.iter() {
+                    let destination = if let Some(s) = w.iter_mut()
+                        .find(|s| !s.get_in_use() && s.available_range().len() * size_of::<usize>() > seg.alive_bytes()) {
+                            s
+                        } else {
+                            let new_seg = empty.pop_front().unwrap_or_else(|| UnsafeRef::new(Segment::new_boxed()));
+                            w.push(new_seg);
+                            w.last_mut().unwrap()
+                        };
+                    println!("Compacting segment at {:016x} ({} bytes alive) into segment at {:016x} ({} bytes available)", seg.data().as_ptr() as usize, seg.alive_bytes(), destination.data().as_ptr() as usize, destination.available_range().len() * size_of::<usize>());
+                    let mut index = destination.available_range().start;
                     for or in seg.iter() {
                         debug_assert!(seg.is_marked(or).unwrap());
                         debug_assert!(!seg.is_pinned(or).unwrap());
                         let ptr_size = unsafe { (*or).total_size_aligned() / size_of::<usize>() };
-                        if destination.data().len() - index < ptr_size {
-                            w.push(UnsafeRef::new(destination));
-                            destination = Segment::new_boxed();
-                            index = 0;
-                        }
 
                         let src = unsafe { &*slice_from_raw_parts((or as *const usize).wrapping_sub(1), ptr_size) };
                         let data = &mut destination.data_mut()[index..];
@@ -260,9 +249,13 @@ impl RustGc {
 
                         index += ptr_size;
                     }
+                    destination.update_available_range(index);
                     println!("Dropping moved segment at {:016x}", seg.data().as_ptr() as usize);
                 }
-                w.push(UnsafeRef::new(destination));
+
+                for e in empty.into_iter() {
+                    println!("Dropping empty segment at {:016x}", e.data().as_ptr() as usize);
+                }
 
                 // Modify moved references
                 let fix_ref = |pp_obj: &mut ObjectRef| {
