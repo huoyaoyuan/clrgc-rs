@@ -9,6 +9,8 @@ pub struct IGCToCLR {
     vptr: *const IGCToClrVTable,
 }
 
+/// The context struct used during root scanning. Only the [`ScanContext::_unused1`] field is owned by GC, which is used to store the closure for the callback.
+/// The rest of the fields are used by CLR.
 #[repr(C)]
 #[derive(Default)]
 pub struct ScanContext {
@@ -121,6 +123,7 @@ impl GCToCLR {
         (self.vtable().RestartEE)(self.ptr, finished_gc)
     }
 
+    /// Asking CLR to scan root references. The roots are returned in mutable locations and can be updated when needed.
     pub fn scan_roots<F: FnMut(&mut ObjectRef, &ScanContext, ScanFlags)>
         (&self, generation: i32, max_gen: i32, promotion: bool, is_bgc: bool, is_concurrent: bool, mut callback: F) {
         (self.vtable().BeforeGcScanRoots)(self.ptr, generation, is_bgc, is_concurrent);
@@ -167,6 +170,9 @@ impl GCToCLR {
         (self.vtable().StompWriteBarrier)(self.ptr, args)
     }
 
+    /// Informs CLR that new objects available in the finalization queue.
+    /// The Finalization thread drains the queue in background, and sleeps when the queue becomes empty.
+    /// This method wakes up the finalization thread.
     pub fn enable_finalization(&self, has_finalizable: bool) {
         (self.vtable().EnableFinalization)(self.ptr, has_finalizable);
     }

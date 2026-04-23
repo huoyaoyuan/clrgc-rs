@@ -40,6 +40,8 @@ pub struct VersionInfo {
     Name: *const c_char,
 }
 
+/// The [`GC_VersionInfo`] function is called before [`GC_Initialize`] to query the version of the GC.
+/// CLR passes its expected version in the [`VersionInfo`] struct. Standalone GC implementation must provide the same major version and same or higher minor version.
 #[unsafe(no_mangle)]
 pub extern "C" fn GC_VersionInfo(info: *mut VersionInfo) {
     println!("GC_VersionInfo!");

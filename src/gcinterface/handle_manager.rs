@@ -65,6 +65,8 @@ static GCHandleStore_vtable : IGCHandleStoreVTable = IGCHandleStoreVTable {
     Destruct: GCHandleStore_Nop,
 };
 
+/// Historically, CLR used multiple handle stores, which isn't the case anymore.
+/// Store the vtable of global handle store in the same object, utilizing multiple-inheritance like layout of C++ objects.
 #[repr(C)]
 pub struct IGCHandleManager {
     vptr: *const IGCHandleManagerVTable,
