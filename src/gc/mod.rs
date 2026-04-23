@@ -242,7 +242,7 @@ impl RustGc {
                         debug_assert!(seg.is_marked(or).unwrap());
                         debug_assert!(!seg.is_pinned(or).unwrap());
                         let ptr_size = unsafe { (*or).total_size_aligned() / size_of::<usize>() };
-                        if seg.data().len() - index < ptr_size {
+                        if destination.data().len() - index < ptr_size {
                             w.push(UnsafeRef::new(destination));
                             destination = Segment::new_boxed();
                             index = 0;
