@@ -5,9 +5,15 @@ use super::*;
 use crate::gc::RustGc;
 use crate::objects::*;
 
+/// The core allocation structure, representing a continuous region for allocation.
+/// 
+/// Most allocations of small objects are done by CLR helper code without calling into GC.
+/// Every threads gets a thread-local allocation context, and consults GC when it's full.
 #[repr(C)]
 pub struct gc_alloc_context {
+    /// The address of next allocated object.
     pub alloc_ptr: usize,
+    /// The upper limit (exclusive) of the allocation context.
     pub alloc_limit: usize,
     alloc_bytes: i64,
     alloc_bytes_uoh: i64,
@@ -36,10 +42,20 @@ pub struct IGCHeap {
     gc: *mut RustGc,
 }
 
+// The tricky nop functions that can fit most signatures.
+// Notably it won't work on x86 stdcall, where callee cleans the stack.
 type DummyFunc = extern "system" fn() -> usize;
 extern "system" fn nop() -> usize { 0 }
 extern "system" fn nop_ret_non_null() -> usize { 1 }
 
+/// The central interface for the GC.
+/// 
+/// Although many of the methods are not required for basic functionality, several methods must be set up, otherwise CLR will crash for hello world:
+/// - [`IGCHeapVTable::GetNextFinalizable`] must not return a wild pointer. Return `null` for prototype implementation.
+/// - `GetExtraWorkForFinalization`([`IGCHeapVTable::more`]`[8]`) must not return a wild pointer.
+/// - [`IGCHeapVTable::RegisterForFinalization`] must return true when any finalization support is set up, from the `Gen2GCCallback` object in BCL.
+/// - `IsEphemeral`([`IGCHeapVTable::vm1`]`[6]`) should return `true`, otherwise some roots won't be reported when a collection is considered ephemeral by CLR.
+/// - `RegisterFrozenSegment`([`IGCHeapVTable::frozen`]`[0]`) must return non-zero handle, otherwise CLR will fail to start.
 #[repr(C)]
 pub struct IGCHeapVTable {
     // Hosting APIs
@@ -144,6 +160,7 @@ fn get_gc(this: *mut IGCHeap) -> &'static mut RustGc {
 }
 
 extern "system" fn GCHeap_GetNumberOfFinalizable(_: *mut IGCHeap) -> isize {
+    // Not really used in modern CLR
     unimplemented!()
 }
 
@@ -166,6 +183,7 @@ extern "system" fn GCHeap_RegisterForFinalization(this: *mut IGCHeap, _: i32, ob
     true
 }
 
+/// The initialization method is called by CLR when it has initialized other components.
 extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     println!("GCHeap::Initialize");
 
@@ -178,6 +196,11 @@ extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
         }
     }
 
+    // Toggle the write barrier code to skip writing the card table.
+    // The write barrier code hard codes generational behavior and the card table structure.
+
+    // Card table is used when writing references from older generation to ephemeral generation.
+    // Setting the ephemeral generation range to empty effectively disables the card table.
     let mut write_barrier_args = WriteBarrierParameters::default();
     write_barrier_args.operation = WriteBarrierOp::Initialize;
     write_barrier_args.is_runtime_suspended = true;
@@ -187,26 +210,43 @@ extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
     0
 }
 
+/// The core allocation method invoked by CLR or managed code.
+/// It's invoked every time when an allocation context is full, or an object needs special flags (e.g. pinned, finalizable, large object).
+/// 
+/// GC is only asked for a space of the total size. [`Object::method_table`] and [`Object::component_count`] will be filled by CLR code.
 extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_context, size: usize, flags: AllocFlags) -> ObjectRef {
     if flags.intersects(AllocFlags::Align8 | AllocFlags::Align8Bias) {
+        // Align8 and Align8Bias are used for objects requiring 8-byte alignment on 32-bit platforms, namely double arrays.
+        // Align8 requires the object to be 8-byte aligned, and Align8Bias requires the object to be 4-byte aligned but not 8-byte aligned.
+        // Since we are not interested to support 32-bit platforms, just reject such flags.
         unimplemented!()
     }
+
+    // The size parameter represents on-heap size, which includes the object header and method table.
+    // For variable-sized objects, namely string and byte[], the size is not aligned to pointer size by the caller.
     let size = align_to_ptr(size);
+
     let context = unsafe { &mut *acontext };
     let obj = context.alloc_ptr as ObjectRef;
+    // Matches the check in CLR helper code. alloc_ptr + size can potentially overflow.
     if context.alloc_limit - context.alloc_ptr >= size {
+        // This is actually the rare path. Most small objects are allocated by CLR helper code.
         context.alloc_ptr = context.alloc_ptr + size;
         obj
     } else {
         // Trigger a GC for each new segment
         get_gc(this).do_collect(0);
 
+        // Most flags are optimizational hint and can be ignored. The PinnedObjectHeap flag means the object is pinned permanently and requires special handling.
         let segment = get_gc(this).add_segment(size, flags.contains(AllocFlags::PinnedObjectHeap));
         println!("Allocated new segment at {:016x}-{:016x}, Length {}", segment.start as usize, segment.end as usize, unsafe { segment.end.byte_offset_from(segment.start) });
+        // Leave a pointer space for object header.
         let obj_ptr = segment.start.wrapping_add(1);
         context.alloc_ptr = obj_ptr as usize + size;
         context.alloc_limit = segment.end as usize;
+        // We must ensure alloc_limit >= alloc_ptr, since the CLR helper code does unsigned substraction for alloc_limit - alloc_ptr >= size.
         debug_assert!(context.alloc_limit >= context.alloc_ptr);
+        debug_assert!((obj_ptr as ObjectRef).is_aligned());
         obj_ptr as ObjectRef
     }
 }
