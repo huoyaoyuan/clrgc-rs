@@ -47,6 +47,10 @@ impl RustGc {
     pub fn do_collect(&mut self, generation: i32) {
         println!("GC triggered for generation {}", generation);
 
+        // All threads touching managed references must be paused at least for root marking and object moving.
+        // As a naive implementation without concurrent collection, do a simple STW during the entire GC.
+        // The CLR threading model ensures that every thread is suspended at safe point where every manipulated
+        // reference can be precisely reported.
         println!("Suspending EE");
         self.clr.suspend_ee(SuspendReason::GC);
 
@@ -59,6 +63,8 @@ impl RustGc {
             or.is_null() || find_segment(or).is_some_and(|seg| !seg.is_marked(or).unwrap());
 
         let mut mark_queue: VecDeque<ObjectRef> = VecDeque::new();
+        // Mark an object as reachable. If the object is newly marked, add it into the queue for field walking.
+        // Non-heap references like reference to stack variables should be skipped.
         let try_mark_push = |mark_queue: &mut VecDeque<ObjectRef>, or: ObjectRef, pin: bool| {
             if !or.is_null() && let Some(segment) = find_segment(or) {
                 if segment.get_mut().mark_object(or, pin).unwrap() {
@@ -68,13 +74,20 @@ impl RustGc {
         };
         let mut handle_table_lock = self.handle_table.write().unwrap();
 
-        // Start mark phase
+        // ----------
+        // Mark phase
+        // ----------
+
+        // Scan roots reported by CLR. The majority are on-stack variables,
+        // as well as references hold by CLR native code with GC_PROTECT().
         self.clr.scan_roots(generation, 2, true, false, false,
             |pp_obj, _sc, f| {
                 let or =
                     if (*pp_obj).is_null() {
                         None
                     } else if f.contains(ScanFlags::MayBeInterior) {
+                        // `ref` variables and `ref struct` can point to the non-start position of object
+                        // and are called "interior references". We need to find the start of the actual object.
                         find_segment(*pp_obj).and_then(|s| s.find_object(*pp_obj))
                     } else {
                         Some(*pp_obj)
@@ -86,6 +99,7 @@ impl RustGc {
             });
         // println!("Encountered {} roots from stack.", mark_queue.len());
 
+        // Strong and pinned handles keep object rooted.
         for h in handle_table_lock.iter().filter(|h| !h.object.is_null()) {
             match h.handle_type {
                 HandleType::Strong => try_mark_push(&mut mark_queue, h.object, false),
@@ -95,16 +109,22 @@ impl RustGc {
         }
         // println!("Encountered {} roots from stack & handle.", mark_queue.len() - stack_roots);
 
+        // Objects in finalization queue are kept uncleared. Since we do not use extra flag to distinguish
+        // whether finalization is completed, just rooting the finalization queue is sufficient.
         for f in self.finalization_queue.lock().unwrap().iter() {
             try_mark_push(&mut mark_queue, *f, false);
         }
 
+        // We have done marking the roots. Mark every object reachable from the roots.
         while !mark_queue.is_empty() {
             while let Some(or) = mark_queue.pop_front() {
                 let obj = unsafe { &mut *or };
                 obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
             }
 
+            // For primary object of dependent handles which are alive, mark its secondary object.
+            // This must be done in a loop with regular field propagation, because dependent handle
+            // can reach new primary object, either directly or indirectly with fields.
             for h in handle_table_lock.iter().filter(|h| h.handle_type == HandleType::Dependent) {
                 if !is_object_dead(h.object) {
                     try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
@@ -112,6 +132,8 @@ impl RustGc {
             }
         }
 
+        // All the root reachable objects are marked. Clear weak handles now.
+        // Weak handles are cleared when the object is eligible for finalization.
         for h in handle_table_lock.iter_mut() {
             if h.handle_type == HandleType::Short && is_object_dead(h.object) {
                 h.object = null_mut();
@@ -121,12 +143,18 @@ impl RustGc {
         let has_finalizable;
 
         // Mark finalizables
+        // Objects unreachable from roots are eligible for finalization. Objects reachable from
+        // finalizable objects are kept, but they are also eligible for finalization. In other
+        // words, a finalizable object can see its field finalized in finalizer.
         {
             let mut finalizables: VecDeque<ObjectRef> = VecDeque::new();
             for seg in r.iter() {
                 for or in seg.iter() {
                     let obj = unsafe { &mut *or };
                     if !seg.is_marked(or).unwrap() && obj.needs_finalization() && !seg.get_finalization_pending(or).unwrap() {
+                        // If an object is not marked at this stage, it's eligible for finalization.
+                        // For object with finalization pending flag set, it will be kept alive by finalization queue,
+                        // then by finalizer thread, then unreachable if finalizer completes.
                         finalizables.push_back(or);
                         seg.get_mut().set_finalization_pending(or, true).unwrap();
                         try_mark_push(&mut mark_queue, or, false);
@@ -134,6 +162,7 @@ impl RustGc {
                 }
             }
 
+            // Populate objects reachable from finalizable objects. All such objects will be kept on heap.
             while !mark_queue.is_empty() {
                 while let Some(or) = mark_queue.pop_front() {
                     let obj = unsafe { &mut *or };
@@ -153,6 +182,8 @@ impl RustGc {
             has_finalizable = !q.is_empty();
         }
 
+        // All the finalization-reachable objects are marked. Clear recursion-tracking and dependent handles now.
+        // Recursion-tracking handles are cleared when the object is unreachable from finalization.
         for h in handle_table_lock.iter_mut().filter(|h| is_object_dead(h.object)) {
             debug_assert!(h.object.is_null() || h.handle_type == HandleType::ShortRecurrsion || h.handle_type == HandleType::Dependent);
             h.object = null_mut();
@@ -195,10 +226,13 @@ impl RustGc {
         println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}. Pinned: {}.", heap_count, heap_bytes, marked_count, pinned_count);
         // println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
 
-        // Start sweep phase
+        // ----------
+        // Sweep phase
+        // ----------
         {
             let mut w = self.segments.write().unwrap();
 
+            // During sweep, the ending of the segment will be modified. This will be break active allocations.
             self.clr.for_each_alloc_context(|c| {
                 if c.alloc_limit != 0 {
                     w.iter_mut()
@@ -208,20 +242,25 @@ impl RustGc {
                 }
             });
 
+            // Do the sweeping. Extract empty segments (sweep returns false).
             let mut empty: VecDeque<_> = w.extract_if(.., |s| !s.get_in_use() && !s.sweep()).collect();
 
             let heap_count = w.iter().flat_map(|s| s.iter()).count();
             let heap_bytes = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
             // println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
 
+            // Segment with usage below threshold are eligible for compating. Pinning an object will make
+            // the whole segment not compactible, since leaving a pinned object occupying the whole segment
+            // is usually not beneficial.
             const COMPACT_THRESHOLD: usize = Segment::SIZE / 4;
             let dropped_segments: Vec<_> = w
                 .extract_if(.., |s|
                     !s.get_in_use() && !s.contains_pinned() && s.alive_bytes() < COMPACT_THRESHOLD)
                 .collect();
             if dropped_segments.len() > 1 {
-                // Compact small segments
                 for seg in dropped_segments.iter() {
+                    // Find a destination to move. Prefer existing segments with enough space.
+                    // Decide destination by segment and consider trailing space only. This simplifies the algorithm greatfully.
                     let destination = if let Some(s) = w.iter_mut()
                         .find(|s| !s.get_in_use() && s.available_range().len() * size_of::<usize>() > seg.alive_bytes()) {
                             s
@@ -237,13 +276,17 @@ impl RustGc {
                         debug_assert!(!seg.is_pinned(or).unwrap());
                         let ptr_size = unsafe { (*or).total_size_aligned() / size_of::<usize>() };
 
+                        // Copy the object to new destination. Note the offset -1 to include object header,
+                        // and exclude next object header.
                         let src = unsafe { &*slice_from_raw_parts((or as *const usize).wrapping_sub(1), ptr_size) };
                         let data = &mut destination.data_mut()[index..];
                         let new_or = &raw const data[1] as ObjectRef;
                         data[..ptr_size].copy_from_slice(src);
                         unsafe {
+                            // Store the moved address at object header space. This keeps the old segment traversable.
                             *(or as *mut usize).wrapping_sub(1) = new_or as usize;
                         }
+                        // Copy persist flags to new segment.
                         destination.set_finalization_pending(new_or, seg.get_finalization_pending(or).unwrap()).unwrap();
                         // println!("Copied object sized {} from {:016x} to {:016x}", ptr_size * size_of::<usize>(), or as usize, new_or as usize);
 
@@ -257,7 +300,7 @@ impl RustGc {
                     println!("Dropping empty segment at {:016x}", e.data().as_ptr() as usize);
                 }
 
-                // Modify moved references
+                // Modify all references to moved object. Extract the new address from object header space.
                 let fix_ref = |pp_obj: &mut ObjectRef| {
                     if dropped_segments.iter().any(|s| s.contains(*pp_obj)) {
                         let move_target = unsafe { *(*pp_obj as *mut usize).wrapping_sub(1) };
@@ -275,6 +318,7 @@ impl RustGc {
                     }
                 };
 
+                // Traverse roots reported by CLR. Set promotion=false to the call for updating.
                 self.clr.scan_roots(generation, 2, false, false, false,
                     |pp_obj, _, f| {
                         if f.contains(ScanFlags::MayBeInterior) {
@@ -283,6 +327,8 @@ impl RustGc {
                             fix_ref(pp_obj);
                         }
                     });
+                // Traverse the entire heap to find reference in fields. This is the longest STW step in concurrent GC,
+                // and generational GC optimizes this by explicitly tracking cross-generation references.
                 for seg in w.iter() {
                     for or in seg.iter() {
                         let obj = unsafe { &mut *or };
@@ -301,9 +347,12 @@ impl RustGc {
                     fix_ref(f);
                 }
             } else {
+                // Avoid allocating a new segment for 1 compactible segment. Since it's usually not beneficial,
+                // just cancel the compaction.
                 w.extend(dropped_segments);
             }
 
+            // Clear all transient flags like mark and pin. Permanent flags like finalization are preserved.
             for seg in w.iter_mut() {
                 seg.clear_flags();
             }
@@ -320,6 +369,9 @@ impl RustGc {
         self.clr.enable_finalization(has_finalizable);
     }
 
+    /// Retrieves a finalizable object by the finalization thread.
+    /// Once extracted, the object will be rooted by the finalization thread until finalization is done.
+    /// The thread will not reach safe point before it stores the reference.
     pub fn pop_finalizable(&mut self) -> Option<ObjectRef> {
         self.finalization_queue.lock().unwrap().pop_front()
     }
