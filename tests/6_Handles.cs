@@ -35,6 +35,36 @@ Debug.Assert(recursedep.TryGetTarget(out _));
 Debug.Assert(!weakdep.TryGetTarget(out _));
 Debug.Assert(dep2.Target is null);
 Debug.Assert(dep2.Dependent is null);
+recurse.Dispose();
+weak.Dispose();
+recursedep.Dispose();
+weakdep.Dispose();
+dep.Dispose();
+dep2.Dispose();
+
+var CWT2 = () =>
+{
+    var objects = new object[100];
+    for (int i = 0; i < objects.Length; i++)
+    {
+        objects[i] = new object();
+    }
+
+    var cwt = new ConditionalWeakTable<object, object>();
+    for (int i = objects.Length - 1; i > 0; i--)
+    {
+        cwt.Add(objects[i - 1], objects[i]);
+    }
+    return (cwt, objects[0], new WeakReference<object>(objects[99]));
+};
+{
+    var (cwt, first, wr) = CWT2();
+    GC.Collect();
+    GC.Collect();
+    Debug.Assert(wr.TryGetTarget(out _));
+    GC.KeepAlive(first);
+    GC.KeepAlive(cwt);
+}
 
 var CWT = () =>
 {
@@ -54,14 +84,15 @@ var CWT = () =>
     }
     return (alive, cwt);
 };
-
-var (alive, cwt) = CWT();
-GC.Collect();
-GC.WaitForPendingFinalizers();
-Console.WriteLine($"Finalized: {Finalizable.FinalizedCount}");
-Debug.Assert(Finalizable.FinalizedCount == 900);
-GC.KeepAlive(alive);
-GC.KeepAlive(cwt);
+{
+    var (alive, cwt) = CWT();
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    Console.WriteLine($"Finalized: {Finalizable.FinalizedCount}");
+    Debug.Assert(Finalizable.FinalizedCount == 900);
+    GC.KeepAlive(alive);
+    GC.KeepAlive(cwt);
+}
 
 class Recurse(object? field)
 {
