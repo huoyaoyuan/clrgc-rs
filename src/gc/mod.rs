@@ -66,13 +66,6 @@ impl RustGc {
                 }
             }
         };
-        let populate_fields = |mut mark_queue: &mut VecDeque<ObjectRef>| {
-            while let Some(or) = mark_queue.pop_front() {
-                let obj = unsafe { &mut *or };
-                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
-            }
-        };
-
         let mut handle_table_lock = self.handle_table.write().unwrap();
 
         // Start mark phase
@@ -106,15 +99,18 @@ impl RustGc {
             try_mark_push(&mut mark_queue, *f, false);
         }
 
-        populate_fields(&mut mark_queue);
+        while !mark_queue.is_empty() {
+            while let Some(or) = mark_queue.pop_front() {
+                let obj = unsafe { &mut *or };
+                obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
+            }
 
-        for h in handle_table_lock.iter().filter(|h| h.handle_type == HandleType::Dependent) {
-            if !is_object_dead(h.object) {
-                try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
+            for h in handle_table_lock.iter().filter(|h| h.handle_type == HandleType::Dependent) {
+                if !is_object_dead(h.object) {
+                    try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
+                }
             }
         }
-
-        populate_fields(&mut mark_queue);
 
         for h in handle_table_lock.iter_mut() {
             if h.handle_type == HandleType::Short && is_object_dead(h.object) {
@@ -138,16 +134,18 @@ impl RustGc {
                 }
             }
 
-            for h in handle_table_lock.iter_mut().filter(|h| h.handle_type == HandleType::Dependent) {
-                if is_object_dead(h.object) {
-                    h.object = null_mut();
-                    h.extra_or_secondary = 0;
-                } else {
-                    try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
+            while !mark_queue.is_empty() {
+                while let Some(or) = mark_queue.pop_front() {
+                    let obj = unsafe { &mut *or };
+                    obj.for_each_obj_ref(|r| try_mark_push(&mut mark_queue, *r, false));
+                }
+
+                for h in handle_table_lock.iter().filter(|h| h.handle_type == HandleType::Dependent) {
+                    if !is_object_dead(h.object) {
+                        try_mark_push(&mut mark_queue, h.extra_or_secondary as ObjectRef, false);
+                    }
                 }
             }
-
-            populate_fields(&mut mark_queue);
 
             let mut q = self.finalization_queue.lock().unwrap();
             // println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
@@ -155,9 +153,11 @@ impl RustGc {
             has_finalizable = !q.is_empty();
         }
 
-        for h in handle_table_lock.iter_mut() {
-            if h.handle_type == HandleType::ShortRecurrsion && is_object_dead(h.object) {
-                h.object = null_mut();
+        for h in handle_table_lock.iter_mut().filter(|h| is_object_dead(h.object)) {
+            debug_assert!(h.object.is_null() || h.handle_type == HandleType::ShortRecurrsion || h.handle_type == HandleType::Dependent);
+            h.object = null_mut();
+            if h.handle_type == HandleType::Dependent {
+                h.extra_or_secondary = 0;
             }
         }
 
