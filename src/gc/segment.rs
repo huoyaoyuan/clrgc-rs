@@ -43,6 +43,8 @@ impl Segment {
         unsafe { Box::new_zeroed().assume_init() }
     }
 
+    /// The per-object flags are stored in dense bit maps. Each pointer space of the segment
+    /// can be the start of an object, and the flag of the object is stored at index of the pointer.
     fn get_index(&self, or: ObjectRef) -> Result<usize, ()> {
         self.data.index_of(or as *mut usize).ok_or(())
     }
@@ -192,12 +194,17 @@ impl Iterator for RawSegmentIter {
     type Item = (ObjectRef, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
+        // The core logic for heap walking, implemented in manual interator.
+
         if !self.range.contains(&self.next) {
+            // The previous object takes exactly to segment end.
             return None;
         }
 
         let obj = unsafe { &*(self.next as ObjectRef) };
         if obj.method_table.is_null() {
+            // Reaching the end of used space of the segment.
+            // Note that for empty space between objects, the method table should be set as the free object.
             return None;
         }
 
