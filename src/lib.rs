@@ -4,6 +4,7 @@ mod objects;
 mod utils;
 
 use std::ffi::c_char;
+use log::info;
 
 use crate::gc::RustGc;
 use crate::gcinterface::*;
@@ -21,7 +22,7 @@ pub extern "C" fn GC_Initialize(
     gcHandleManager: *mut *const IGCHandleManager,
     _gcDescVars: *const GcDescVars,
 ) -> u32 {
-    println!("GC_Initialize!");
+    info!("GC_Initialize!");
 
     unsafe {
         let gc = heap_alloc(RustGc::new(clrToGC));
@@ -44,8 +45,9 @@ pub struct VersionInfo {
 /// CLR passes its expected version in the [`VersionInfo`] struct. Standalone GC implementation must provide the same major version and same or higher minor version.
 #[unsafe(no_mangle)]
 pub extern "C" fn GC_VersionInfo(info: *mut VersionInfo) {
-    println!("GC_VersionInfo!");
+    info!("GC_VersionInfo!");
     unsafe {
+        info!("CLR expects {}.{}.{}", (*info).MajorVersion, (*info).MinorVersion, (*info).BuildVersion);
         (*info).MajorVersion = 5;
         (*info).MinorVersion = 8;
         (*info).BuildVersion = 0;

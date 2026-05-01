@@ -7,6 +7,7 @@ use std::ops::Range;
 use std::ptr::{null_mut, slice_from_raw_parts};
 use std::sync::{Mutex, RwLock};
 use std::vec;
+use log::{debug, info, trace};
 
 use crate::gcinterface::*;
 use crate::objects::*;
@@ -19,6 +20,48 @@ pub struct RustGc {
     pub handle_table: RwLock<HandleTable>,
     segments: RwLock<Vec<UnsafeRef<dyn Seg>>>,
     finalization_queue: Mutex<VecDeque<ObjectRef>>,
+}
+
+#[cfg(debug_assertions)]
+struct HeapWalkStats {
+    object_count: i32,
+    marked_count: i32,
+    pinned_count: i32,
+    total_size: usize,
+}
+
+#[cfg(debug_assertions)]
+fn heap_walk<I>(it: &I, test_fields: bool) -> HeapWalkStats
+where
+    for<'a> &'a I: IntoIterator<Item = &'a UnsafeRef<dyn Seg + 'static>>,
+{
+    let mut object_count = 0;
+    let mut marked_count = 0;
+    let mut pinned_count = 0;
+    let mut total_size = 0;
+    for seg in it.into_iter() {
+        for or in seg.iter() {
+            unsafe {
+                // println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
+                // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
+                object_count += 1;
+                total_size += (*or).total_size_aligned();
+                if seg.is_marked(or).unwrap_or(false) { marked_count += 1; }
+                if seg.is_pinned(or).unwrap_or(false) { pinned_count += 1; }
+
+                if test_fields {
+                    (*or).for_each_obj_ref(|field| {
+                        if !field.is_null() {
+                            _ = (**field).total_size_aligned();
+                            // println!("Non-null field at {:016x}, target: {:016x}, target MT: {:016x}", field as *const ObjectRef as usize, (*field) as usize, (**field).method_table as usize);
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    HeapWalkStats { object_count, marked_count, pinned_count, total_size }
 }
 
 impl RustGc {
@@ -45,13 +88,13 @@ impl RustGc {
     }
 
     pub fn do_collect(&mut self, generation: i32) {
-        println!("GC triggered for generation {}", generation);
+        info!("GC triggered for generation {}", generation);
 
         // All threads touching managed references must be paused at least for root marking and object moving.
         // As a naive implementation without concurrent collection, do a simple STW during the entire GC.
         // The CLR threading model ensures that every thread is suspended at safe point where every manipulated
         // reference can be precisely reported.
-        println!("Suspending EE");
+        info!("Suspending EE");
         self.clr.suspend_ee(SuspendReason::GC);
 
         self.clr.gc_start_work(generation, 2);
@@ -73,6 +116,10 @@ impl RustGc {
             }
         };
         let mut handle_table_lock = self.handle_table.write().unwrap();
+
+        // Heap check in advance
+        #[cfg(debug_assertions)]
+        heap_walk(&*r, true);
 
         // ----------
         // Mark phase
@@ -97,7 +144,6 @@ impl RustGc {
                     try_mark_push(&mut mark_queue, obj, f.contains(ScanFlags::Pinned));
                 }
             });
-        // println!("Encountered {} roots from stack.", mark_queue.len());
 
         // Strong and pinned handles keep object rooted.
         for h in handle_table_lock.iter().filter(|h| !h.object.is_null()) {
@@ -107,7 +153,6 @@ impl RustGc {
                 _ => {}
             }
         }
-        // println!("Encountered {} roots from stack & handle.", mark_queue.len() - stack_roots);
 
         // Objects in finalization queue are kept uncleared. Since we do not use extra flag to distinguish
         // whether finalization is completed, just rooting the finalization queue is sufficient.
@@ -136,6 +181,9 @@ impl RustGc {
         // Weak handles are cleared when the object is eligible for finalization.
         for h in handle_table_lock.iter_mut() {
             if h.handle_type == HandleType::Short && is_object_dead(h.object) {
+                if !h.object.is_null() {
+                    trace!("Clearing Weak handle at {:016x} to object {:016x}", h as *const _ as usize, h.object as usize);
+                }
                 h.object = null_mut();
             }
         }
@@ -155,6 +203,7 @@ impl RustGc {
                         // If an object is not marked at this stage, it's eligible for finalization.
                         // For object with finalization pending flag set, it will be kept alive by finalization queue,
                         // then by finalizer thread, then unreachable if finalizer completes.
+                        trace!("Adding {:016x} to finalization queue", or as usize);
                         finalizables.push_back(or);
                         seg.get_mut().set_finalization_pending(or, true).unwrap();
                         try_mark_push(&mut mark_queue, or, false);
@@ -177,7 +226,7 @@ impl RustGc {
             }
 
             let mut q = self.finalization_queue.lock().unwrap();
-            // println!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
+            debug!("Find {} new objects eligible for finalization. Existing in queue: {}", finalizables.len(), q.len());
             q.extend(finalizables);
             has_finalizable = !q.is_empty();
         }
@@ -186,6 +235,9 @@ impl RustGc {
         // Recursion-tracking handles are cleared when the object is unreachable from finalization.
         for h in handle_table_lock.iter_mut().filter(|h| is_object_dead(h.object)) {
             debug_assert!(h.object.is_null() || h.handle_type == HandleType::ShortRecurrsion || h.handle_type == HandleType::Dependent);
+            if !h.object.is_null() {
+                trace!("Clearing {:?} handle at {:016x} to object {:016x}", h.handle_type, h as *const _ as usize, h.object as usize);
+            }
             h.object = null_mut();
             if h.handle_type == HandleType::Dependent {
                 h.extra_or_secondary = 0;
@@ -194,37 +246,10 @@ impl RustGc {
 
         drop(r);
 
-        let mut heap_count = 0;
-        let mut heap_bytes = 0;
-        let mut marked_count = 0;
-        let mut pinned_count = 0;
-        let mut field_count = 0;
-        let mut non_null_field_count = 0;
-        {
-            let r = self.segments.read().unwrap();
-            for seg in r.iter() {
-                for or in seg.iter() {
-                    unsafe {
-                        // println!("Walking at {:016x}, MethodTable: {:016x}", or as usize, (*or).method_table as usize);
-                        // println!("Object: HasComponentSize: {}, TotalSize: {}", (*or).has_component_size(), (*or).total_size());
-                        heap_count += 1;
-                        heap_bytes += (*or).total_size_aligned();
-                        if seg.is_marked(or).unwrap_or(false) { marked_count += 1; }
-                        if seg.is_pinned(or).unwrap_or(false) { pinned_count += 1; }
-
-                        (*or).for_each_obj_ref(|field| {
-                            field_count += 1;
-                            if !field.is_null() {
-                                // println!("Non-null field at {:016x}, target: {:016x}, target MT: {:016x}", field as *const ObjectRef as usize, (*field) as usize, (**field).method_table as usize);
-                                non_null_field_count += 1;
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        println!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}. Pinned: {}.", heap_count, heap_bytes, marked_count, pinned_count);
-        // println!("Encountered totally {} fields on heap. Not null: {}.", field_count, non_null_field_count);
+        #[cfg(debug_assertions)]
+        let stats_before = heap_walk(&*self.segments.read().unwrap(), false);
+        #[cfg(debug_assertions)]
+        debug!("Encountered totally {} objects on heap. Total size: {} bytes. Marked: {}. Pinned: {}.", stats_before.object_count, stats_before.total_size, stats_before.marked_count, stats_before.pinned_count);
 
         // ----------
         // Sweep phase
@@ -245,9 +270,11 @@ impl RustGc {
             // Do the sweeping. Extract empty segments (sweep returns false).
             let mut empty: VecDeque<_> = w.extract_if(.., |s| !s.get_in_use() && !s.sweep()).collect();
 
-            let heap_count = w.iter().flat_map(|s| s.iter()).count();
-            let heap_bytes = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
-            // println!("{} object survived after sweeping. Total size: {}", heap_count, heap_bytes);
+            #[cfg(debug_assertions)]
+            let stat_after_sweep = heap_walk(&*w, false);
+            #[cfg(debug_assertions)]
+            debug!("{} object survived after sweeping. Total size: {}", stat_after_sweep.object_count, stat_after_sweep.total_size);
+            // debug_assert_eq!(stats_before.marked_count, stat_after_sweep.object_count);
 
             // Segment with usage below threshold are eligible for compating. Pinning an object will make
             // the whole segment not compactible, since leaving a pinned object occupying the whole segment
@@ -269,7 +296,7 @@ impl RustGc {
                             w.push(new_seg);
                             w.last_mut().unwrap()
                         };
-                    println!("Compacting segment at {:016x} ({} bytes alive) into segment at {:016x} ({} bytes available)", seg.data().as_ptr() as usize, seg.alive_bytes(), destination.data().as_ptr() as usize, destination.available_range().len() * size_of::<usize>());
+                    debug!("Compacting segment at {:016x} ({} bytes alive) into segment at {:016x} ({} bytes available)", seg.data().as_ptr() as usize, seg.alive_bytes(), destination.data().as_ptr() as usize, destination.available_range().len() * size_of::<usize>());
                     let mut index = destination.available_range().start;
                     for or in seg.iter() {
                         debug_assert!(seg.is_marked(or).unwrap());
@@ -288,23 +315,23 @@ impl RustGc {
                         }
                         // Copy persist flags to new segment.
                         destination.set_finalization_pending(new_or, seg.get_finalization_pending(or).unwrap()).unwrap();
-                        // println!("Copied object sized {} from {:016x} to {:016x}", ptr_size * size_of::<usize>(), or as usize, new_or as usize);
+                        trace!("Copied object sized {} from {:016x} to {:016x}", ptr_size * size_of::<usize>(), or as usize, new_or as usize);
 
                         index += ptr_size;
                     }
                     destination.update_available_range(index);
-                    println!("Dropping moved segment at {:016x}", seg.data().as_ptr() as usize);
+                    debug!("Dropping moved segment at {:016x}", seg.data().as_ptr() as usize);
                 }
 
                 for e in empty.into_iter() {
-                    println!("Dropping empty segment at {:016x}", e.data().as_ptr() as usize);
+                    debug!("Dropping empty segment at {:016x}", e.data().as_ptr() as usize);
                 }
 
                 // Modify all references to moved object. Extract the new address from object header space.
                 let fix_ref = |pp_obj: &mut ObjectRef| {
                     if dropped_segments.iter().any(|s| s.contains(*pp_obj)) {
                         let move_target = unsafe { *(*pp_obj as *mut usize).wrapping_sub(1) };
-                        // println!("Fixing reference at {:016x} from {:016x} to {:016x}", pp_obj as *const ObjectRef as usize, *pp_obj as usize, move_target);
+                        trace!("Fixing reference at {:016x} from {:016x} to {:016x}", pp_obj as *const ObjectRef as usize, *pp_obj as usize, move_target);
                         *pp_obj = move_target as ObjectRef;
                     }
                 };
@@ -313,7 +340,7 @@ impl RustGc {
                     unsafe {
                         let move_target = *(or as *mut usize).wrapping_sub(1);
                         let offset = (*pp_obj).byte_offset_from_unsigned(or);
-                        // println!("Fixing interior reference at {:016x} from {:016x} to {:016x}, offset={}", pp_obj as *const ObjectRef as usize, *pp_obj as usize, move_target + offset, offset);
+                        trace!("Fixing interior reference at {:016x} from {:016x} to {:016x}, offset={}", pp_obj as *const ObjectRef as usize, *pp_obj as usize, move_target + offset, offset);
                         *pp_obj = (move_target + offset) as ObjectRef;
                     }
                 };
@@ -357,13 +384,15 @@ impl RustGc {
                 seg.clear_flags();
             }
 
-            let heap_count_after = w.iter().flat_map(|s| s.iter()).count();
-            let heap_bytes_after = w.iter().flat_map(|s| s.iter().map(|or| unsafe { (*or).total_size_aligned() })).sum::<usize>();
-            assert_eq!(heap_count, heap_count_after);
-            assert_eq!(heap_bytes, heap_bytes_after);
+            #[cfg(debug_assertions)]
+            {
+                let stat_after_compact = heap_walk(&*w, false);
+                debug_assert_eq!(stat_after_sweep.object_count, stat_after_compact.object_count);
+                debug_assert_eq!(stat_after_sweep.total_size, stat_after_compact.total_size);
+            }
         }
 
-        println!("Resuming EE");
+        info!("Resuming EE");
         self.clr.gc_done(generation);
         self.clr.restart_ee(true);
         self.clr.enable_finalization(has_finalizable);

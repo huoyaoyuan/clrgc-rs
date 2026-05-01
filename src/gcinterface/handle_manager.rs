@@ -1,5 +1,6 @@
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use log::{info, trace};
 
 use crate::objects::*;
 use crate::gc::RustGc;
@@ -36,6 +37,7 @@ fn create_handle(gc: &mut RustGc, object: ObjectRef, extra_or_secondary: usize, 
     let mut lock = gc.handle_table.write().unwrap();
     let new = lock.create_new();
     unsafe { *new = GcHandle { object, extra_or_secondary, handle_type } };
+    trace!("Allocate new GCHandle at {:016x}, {:?}", new as usize, handle_type);
     new
 }
 
@@ -103,7 +105,7 @@ fn get_gc(this: *mut IGCHandleManager) -> &'static mut RustGc {
 }
 
 extern "system" fn GCHandleManager_Initialize(_: *mut IGCHandleManager) -> bool {
-    println!("GCHandleManager_Initialize");
+    info!("GCHandleManager_Initialize");
     true
 }
 
@@ -130,10 +132,12 @@ extern "system" fn GCHandleManager_CreateDuplicateHandle(this: *mut IGCHandleMan
     let mut lock = get_gc(this).handle_table.write().unwrap();
     let new = lock.create_new();
     unsafe { *new = *handle };
+    trace!("Allocate new GCHandle at {:016x}, {:?}", new as usize, unsafe { (*handle).handle_type });
     new
 }
 
 extern "system" fn GCHandleManager_DestroyHandleOfType(this: *mut IGCHandleManager, handle: ObjectHandle, _: HandleType) {
+    trace!("Destroy GCHandle at {:016x}, {:?}", handle as usize, unsafe { (*handle).handle_type });
     _ = get_gc(this).handle_table.write().unwrap().remove(handle);
 }
 

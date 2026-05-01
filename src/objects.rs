@@ -203,7 +203,7 @@ impl Object {
 }
 
 #[repr(i32)]
-#[derive(Copy, Clone, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub enum HandleType {
     #[default]
     /// A weak GC handle.

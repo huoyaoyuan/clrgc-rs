@@ -1,5 +1,6 @@
 use std::ptr::null_mut;
 use bitflags::bitflags;
+use log::{debug, info};
 
 use super::*;
 use crate::gc::RustGc;
@@ -185,7 +186,7 @@ extern "system" fn GCHeap_RegisterForFinalization(this: *mut IGCHeap, _: i32, ob
 
 /// The initialization method is called by CLR when it has initialized other components.
 extern "system" fn GCHeap_Initialize(this: *mut IGCHeap) -> u32 {
-    println!("GCHeap::Initialize");
+    info!("GCHeap::Initialize");
 
     unsafe {
         FREE_MT = get_gc(this).clr.get_free_methodtable();
@@ -239,7 +240,7 @@ extern "system" fn GCHeap_Alloc(this: *mut IGCHeap, acontext: *mut gc_alloc_cont
 
         // Most flags are optimizational hint and can be ignored. The PinnedObjectHeap flag means the object is pinned permanently and requires special handling.
         let segment = get_gc(this).add_segment(size, flags.contains(AllocFlags::PinnedObjectHeap));
-        println!("Allocated new segment at {:016x}-{:016x}, Length {}", segment.start as usize, segment.end as usize, unsafe { segment.end.byte_offset_from(segment.start) });
+        debug!("Allocated new segment at {:016x}-{:016x}, Length {}", segment.start as usize, segment.end as usize, unsafe { segment.end.byte_offset_from(segment.start) });
         // Leave a pointer space for object header.
         let obj_ptr = segment.start.wrapping_add(1);
         context.alloc_ptr = obj_ptr as usize + size;
