@@ -1,5 +1,7 @@
 mod gc;
 mod gcinterface;
+#[cfg(debug_assertions)]
+mod logger;
 mod objects;
 mod utils;
 
@@ -22,6 +24,11 @@ pub extern "C" fn GC_Initialize(
     gcHandleManager: *mut *const IGCHandleManager,
     _gcDescVars: *const GcDescVars,
 ) -> u32 {
+    #[cfg(debug_assertions)]
+    {
+        log::set_logger(&logger::LOGGER).unwrap();
+        log::set_max_level(logger::log_level_from_env());
+    }
     info!("GC_Initialize!");
 
     unsafe {

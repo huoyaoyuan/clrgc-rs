@@ -9,6 +9,7 @@ foreach ($file in $(Get-ChildItem -Path ".\tests" -Filter "*.cs")) {
             "DOTNET_GCPath" = $gcPath
             "DOTNET_DbgEnableMiniDump" = "1"
             "RUST_BACKTRACE" = "1"
+            "RUSTGC_LOG" = "debug"
         }
     }
     if ($process.ExitCode -ne 0) {

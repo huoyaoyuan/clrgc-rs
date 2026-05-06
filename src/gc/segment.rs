@@ -185,6 +185,16 @@ impl Seg for Segment {
     }
 }
 
+impl IntoIterator for &dyn Seg {
+    type Item = ObjectRef;
+
+    type IntoIter = Box<dyn Iterator<Item = ObjectRef>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 struct RawSegmentIter {
     pub next: *const usize,
     range: std::ops::Range<*const usize>,
